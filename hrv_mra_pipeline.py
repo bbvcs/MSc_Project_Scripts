@@ -4,6 +4,7 @@ import seaborn as sns
 from scipy import fft
 from scipy import interpolate
 from scipy import signal
+from scipy.signal import butter, sosfiltfilt, sosfreqz
 import pandas as pd
 
 import os
@@ -22,6 +23,33 @@ import pywt # Wavelet Transform?
 import vmdpy # Variational Mode Decomposition
 
 np.random.seed(1905)
+
+
+def butter_bandpass(lowcut, highcut, fs, order=5):
+    
+	sos = butter(order, [lowcut, highcut], btype="bandpass", fs=fs, analog=False,output="sos")
+	return sos
+
+def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+	sos = butter_bandpass(lowcut, highcut, fs, order)
+	y = sosfiltfilt(sos, data) 	
+	return y
+
+def test_butter_bandpass(lowcut=(1/(26*60*60)), highcut=(1/(22*60*60)), fs=1/300, order=5):
+	sos = butter_bandpass(lowcut, highcut, fs, order)
+	w, h = sosfreqz(sos, worN=8000)
+	
+	fig, ax = plt.subplots()
+
+	ax.plot(0.5*fs*w/np.pi, np.abs(h), 'b')
+	#plt.plot(cutoff, 0.5*np.sqrt(2), 'ko')
+	ax.axvline(lowcut, color="k")
+	ax.axvline(highcut, color="k")
+	ax.set_xlim(0, 0.5*fs)
+	ax.set_title("Bandpass Filter Frequency Response")
+	ax.set_xlabel("Frequency [Hz]")
+	ax.grid()
+	fig.show()
 
 def components_plot_old(components, original, out, title, gaps, sharey=True):
 	fig, ax = plt.subplots(len(components)+2, 1, sharex=True, sharey=sharey, figsize=(19.20, 19.20))
@@ -61,7 +89,7 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 
 
 	fig, ax = plt.subplots(len(components)+2, 1, sharex=True, sharey=sharey, figsize=(19.20, 19.20))
-	fig2, ax2 = plt.subplots(len(components)+2, 1, sharex=False, sharey=False, figsize=(19.20, 19.20))
+	fig2, ax2 = plt.subplots(len(components)+2, 1, sharex=False, sharey=True, figsize=(19.20, 19.20))
 
 	x_original = range(0, len(original))
 	x_imfs = range(0, components.shape[1])
@@ -138,6 +166,8 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 
 
 def my_fft(data, sample_rate):
+
+	data = data - np.mean(data) # remove DC Offset (0Hz Spike)
 
 	yf = fft.rfft(data)
 	xf = fft.rfftfreq(len(data), 1/sample_rate)
@@ -289,7 +319,7 @@ def mra(data, gaps, sharey=False):
 	title = f"MeanIHR_VMD"
 	alpha = 2000  # moderate bandwidth constraint  
 	tau = 0.      # noise-tolerance (no strict fidelity enforcement)  
-	K = 9         # n of modes to be recovered  
+	K = 6         # n of modes to be recovered  
 	DC = 0        # no DC part imposed  
 	init = 1      # initialize omegas uniformly 
 	tol = 1e-7
@@ -306,8 +336,77 @@ def mra(data, gaps, sharey=False):
 	fig_dwt, ax_dwt = components_plot(output, data_wt, out, title, gaps, sharey=sharey)	
 
 
-if __name__ == "__main__":
+def wavelet_transform(data, gaps):
 
+	timevec_h = (np.arange(0, len(data))*5)/24
+
+	fs = 1/300
+	w = 10.0 # default Omega0 param for morlet2 (5.0). Seems to control frequency of complex sine part?
+
+	#data = data - np.mean(data) # remove DC offset, otherwise a lot of power at very low frequencies
+	
+	#freqs = np.array([1/(24*60*60), 1/(18*60*60),1/(14*60*60),1/(12*60*60),1/(10*60*60),1/(8*60*60),1/(6*60*60),1/(4*60*60),1/(2*60*60),1/(1*60*60)])	
+	#freqs = np.linspace(freqs[0], freqs[-1], 10000)
+	#freqs = np.linspace(0, freqs[-1], 10000)
+	#freqs = 
+	#freqs = np.linspace(0, fs/2, 10000)
+
+	#periods = 1/freqs
+	#periods = np.array([days*24*60*60 for days in range(13, 1, -1)] + [hours*60*60 for hours in range(47, 0, -1)])
+	#periods = np.array([hours*60*60 for hours in range(288, 0, -1)])
+	periods = np.array([hours*60*60 for hours in range(73, 0, -1)])
+	freqs = 1/periods
+	
+	widths = w * fs / (2 * freqs * np.pi)
+
+	cwtmatr = signal.cwt(data, signal.morlet2, widths, w=w)
+	cwtmatr_yflip = cwtmatr	
+	#cwtmatr_yflip = np.flipud(cwtmatr) # TODO can keep this, just need to flip y axis labels
+	cwtmatr_yflip = np.abs(cwtmatr_yflip) # this isn't in tutorial (as tehy are using ricker wavelet, not complex morlet, i presume), imshow won't work without
+
+	fig, axs = plt.subplots(3,1,sharex=True, height_ratios=[2, 1, 7])
+
+	interpolation = "antialiased"#"none"
+	#axs[2].imshow(cwtmatr_yflip, vmax = abs(cwtmatr).max(), vmin = -abs(cwtmatr).max(), aspect="auto", interpolation=interpolation)
+	#axs[2].imshow(cwtmatr_yflip, vmax = abs(cwtmatr).max(), vmin = 0, aspect="auto", interpolation=interpolation)
+	pos = axs[2].imshow(cwtmatr_yflip, aspect="auto", interpolation=interpolation)
+	#cbar = fig.colorbar(pos, ax=axs[2])
+
+	"""	
+	yticks = ax.get_yticks()
+	yticks = yticks[yticks>=0]
+	yticks[yticks > 0] -= 1
+	axs[1].set_yticks(ticks = yticks, labels=periods[np.int32(yticks)])
+	"""
+	axs[2].set_yticks(ticks=range(0, len(cwtmatr)), labels=np.floor(periods/60/60))
+
+	axs[2].set_ylabel("Period (h)")
+
+
+
+	axs[0].plot(range(0, len(data)), data, color="black", alpha=0.5)
+	axs[0].plot(range(0, len(data)), cut_gaps(data, gaps), color="black")
+
+
+	lowcut=1/(33*60*60)
+	highcut=1/(21*60*60) 
+	fs=fs 
+	order=4
+	test_butter_bandpass(lowcut, highcut, fs, order)
+	axs[1].plot(butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order), c="r", label="Circadian Band (21h-33h)")
+
+	"""
+	original_xticks = axs[0].get_xticks() #sharex=True, so both axs have same xticks
+	original_xticks = original_xticks[original_xticks >= 0]
+	original_xticks = np.int32(original_xticks)
+	original_xticks = [tick for tick in original_xticks if tick < len(data)]
+	axs[0].set_xticks(ticks=original_xticks, labels=timevec_h[original_xticks])
+	axs[1].set_xticks(ticks=original_xticks, labels=timevec_h[original_xticks])
+	"""
+
+	fig.show()	
+
+if __name__ == "__main__":
 	subject = "865"
 	root = f"/home/bcsm/University/stage-4/MSc_Project/UCLH/{subject}"
 	out = f"out/{subject}"
@@ -329,4 +428,6 @@ if __name__ == "__main__":
 	interpolated, gaps = interpolate_gaps(data) 
 
 	# perform multi-resolution analysis (signal decomposition)	
-	mra(interpolated, gaps, sharey=False)	
+	#mra(interpolated, gaps, sharey=False)
+
+	wavelet_transform(interpolated, gaps)	
