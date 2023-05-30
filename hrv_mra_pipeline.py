@@ -213,7 +213,7 @@ def calculate_hrv_metrics(root, out, forced=False):
 
 
 	# TODO keys defined again in produce hrv_dataframes
-	time_dom_keys = np.array(['nni_counter', 'nni_mean', 'nni_min', 'nni_max', 'data', 'hr_min', 'hr_max', 'hr_std', 'nni_diff_mean', 'nni_diff_min', 'nni_diff_max', 'sdnn', 'sdnn_index', 'sdann', 'rmssd', 'sdsd', 'nn50', 'pnn50', 'nn20', 'pnn20', 'nni_histogram', 'tinn_n', 'tinn_m', 'tinn', 'tri_index'])
+	time_dom_keys = np.array(['nni_counter', 'nni_mean', 'nni_min', 'nni_max', 'hr_mean', 'hr_min', 'hr_max', 'hr_std', 'nni_diff_mean', 'nni_diff_min', 'nni_diff_max', 'sdnn', 'sdnn_index', 'sdann', 'rmssd', 'sdsd', 'nn50', 'pnn50', 'nn20', 'pnn20', 'nni_histogram', 'tinn_n', 'tinn_m', 'tinn', 'tri_index'])
 	freq_dom_keys = np.array(['fft_bands', 'fft_peak', 'fft_abs', 'fft_rel', 'fft_log', 'fft_norm', 'fft_ratio', 'fft_total', 'fft_plot', 'fft_nfft', 'fft_window', 'fft_resampling_frequency', 'fft_interpolation'])
 
 
@@ -231,7 +231,7 @@ def calculate_hrv_metrics(root, out, forced=False):
 		#print(modification_report["notes"])
 		
 		if not isinstance(freq_dom_hrv, float):
-			freq_dom_hrvs.append(np.array(freq_dom_hrv))
+			freq_dom_hrvs.append(np.array(freq_dom_hrv, dtype="object"))
 		else:
 			freq_dom_hrvs.append(np.full(shape=freq_dom_keys.shape, fill_value=np.NaN))
 
@@ -327,11 +327,12 @@ def mra(data, gaps, sharey=False):
 	u = np.flip(u)
 	fig_vmd, ax_vmd = components_plot(u, data, out, title, gaps, sharey=sharey)
 
-	# perform DWT
+	# perform WT MRA
 	title = f"MeanIHR_WT"
-	wavelet = pywt.Wavelet("sym4") # sym4 is default wavelet used by MATLAB modwt()
+	#wavelet = pywt.Wavelet("sym4") # sym4 is default wavelet used by MATLAB modwt()
+	wavelet = pywt.Wavelet("db4") 
 	data_wt = data if len(data) % 2 == 0 else data[:-1]
-	output = pywt.mra(data_wt, wavelet)
+	output = pywt.mra(data_wt, wavelet, transform="dwt")
 	output = np.flip(output, axis=0)
 	fig_dwt, ax_dwt = components_plot(output, data_wt, out, title, gaps, sharey=sharey)	
 
@@ -343,7 +344,7 @@ def wavelet_transform(data, gaps):
 	fs = 1/300
 	w = 10.0 # default Omega0 param for morlet2 (5.0). Seems to control frequency of complex sine part?
 
-	#data = data - np.mean(data) # remove DC offset, otherwise a lot of power at very low frequencies
+	data = data - np.mean(data) # remove DC offset, otherwise a lot of power at very low frequencies
 	
 	#freqs = np.array([1/(24*60*60), 1/(18*60*60),1/(14*60*60),1/(12*60*60),1/(10*60*60),1/(8*60*60),1/(6*60*60),1/(4*60*60),1/(2*60*60),1/(1*60*60)])	
 	#freqs = np.linspace(freqs[0], freqs[-1], 10000)
@@ -382,10 +383,12 @@ def wavelet_transform(data, gaps):
 
 	axs[2].set_ylabel("Period (h)")
 
+	axs[2].set_title("Wavelet Transform Time-Frequency", loc="right")
 
 
 	axs[0].plot(range(0, len(data)), data, color="black", alpha=0.5)
 	axs[0].plot(range(0, len(data)), cut_gaps(data, gaps), color="black")
+	axs[0].set_title("Original Data", loc="right")
 
 
 	lowcut=1/(33*60*60)
@@ -394,6 +397,8 @@ def wavelet_transform(data, gaps):
 	order=4
 	test_butter_bandpass(lowcut, highcut, fs, order)
 	axs[1].plot(butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order), c="r", label="Circadian Band (21h-33h)")
+
+	axs[1].set_title("Bandpass-filtered Circadian Rhythm (21h-33h)", loc="right")
 
 	"""
 	original_xticks = axs[0].get_xticks() #sharex=True, so both axs have same xticks
@@ -407,7 +412,7 @@ def wavelet_transform(data, gaps):
 	fig.show()	
 
 if __name__ == "__main__":
-	subject = "865"
+	subject = "909"
 	root = f"/home/bcsm/University/stage-4/MSc_Project/UCLH/{subject}"
 	out = f"out/{subject}"
 
@@ -428,6 +433,7 @@ if __name__ == "__main__":
 	interpolated, gaps = interpolate_gaps(data) 
 
 	# perform multi-resolution analysis (signal decomposition)	
-	#mra(interpolated, gaps, sharey=False)
+	mra(interpolated, gaps, sharey=False)
 
+	# perform time-frequency analysis using wavelet_transform
 	wavelet_transform(interpolated, gaps)	
