@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import fft
@@ -96,7 +97,7 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 	alpha = 0.3 # transparency of the interpolated sections
 	c = "blueviolet" # color of components
 	
-	fs = 1/300
+	fs = 1/300 # TODO this needs to be param
 	nperseg = 30 
 
 	ax2_xticks = np.array([0, 1/(24*60*60), 1/(18*60*60),1/(14*60*60),1/(12*60*60),1/(10*60*60),1/(8*60*60),1/(6*60*60),1/(4*60*60),1/(2*60*60),1/(60*60)])	
@@ -162,6 +163,32 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 	fig.savefig(os.path.join(out, title))
 	fig2.savefig(os.path.join(out, title+"_PSD"))
 
+
+	# produce plot of stacked IMFs with peaks highlighted 
+	cmap = matplotlib.colormaps["ocean"]
+	fig3, ax3 = plt.subplots(figsize=(10.80, 10.80)) 
+	for i, comp in enumerate(components):
+		f, Pxx_den = my_fft(comp, fs) # REPEATED CODE
+
+		peak_idx = np.where(Pxx_den == np.max(Pxx_den))
+		peak_Pxx = Pxx_den[peak_idx]
+		peak_freq = f[peak_idx]
+		peak_period_s = 1/peak_freq
+		peak_period_h = peak_period_s/60/60
+		peak_period_h = np.round(peak_period_h, decimals=2)
+		label = f"Component #{i}, peak period = {peak_period_h[0]}h"
+		color = cmap(1/len(components) * i)
+		
+		ax3.plot(f, Pxx_den, c=color, label=label)
+		ax3.fill_between(f, Pxx_den, color=color)	
+		ax3.scatter(peak_freq, peak_Pxx, marker="x", c="r", zorder=10)
+
+
+	ax3.set_xscale("log")
+	fig3.legend(loc="upper right")
+	fig3.suptitle(title+" Components PSDs Overlaid")
+	fig3.savefig(os.path.join(out, title+"_PSD_OVERLAY"))
+
 	return fig, ax
 
 
@@ -180,6 +207,16 @@ def fft_plot(data, sample_rate): # warn; can't use fft with HRV, irregularly sam
 	ax.plot(xf, np.abs(yf))
 
 	return fig, ax
+
+
+def reflect(data):
+	padlen = len(data) // 2
+	return np.pad(data, padlen, mode="constant")
+
+def remove_reflect(data):
+	"""Remove data added by reflect()"""
+	padlen = len(data) // 4	 # AS LONG AS padlen = len(data)//2 in reflect(), this should work?
+	return data[padlen:-padlen]
 
 
 def run_speedyf(root, out):
@@ -313,6 +350,7 @@ def mra(data, gaps, sharey=False):
 	# perform EEMD
 	title = f"MeanIHR_EEMD"
 	imfs = emd.sift.ensemble_sift(data, nensembles=4, nprocesses=3, ensemble_noise=1).T
+	imfs = imfs[1:]
 	fig_eemd, ax_eemd = components_plot(imfs, data, out, title, gaps, sharey=sharey)
 	
 	# perform VMD
@@ -324,7 +362,7 @@ def mra(data, gaps, sharey=False):
 	init = 1      # initialize omegas uniformly 
 	tol = 1e-7
 	u, u_hat, omega = vmdpy.VMD(data, alpha, tau, K, DC, init, tol)
-	u = np.flip(u)
+	u = np.flipud(u)
 	fig_vmd, ax_vmd = components_plot(u, data, out, title, gaps, sharey=sharey)
 
 	# perform WT MRA
@@ -341,11 +379,13 @@ def wavelet_transform(data, gaps):
 
 	timevec_h = (np.arange(0, len(data))*5)/24
 
-	fs = 1/300
-	w = 10.0 # default Omega0 param for morlet2 (5.0). Seems to control frequency of complex sine part?
+	fs = 1/300 # TODO this needs to be param
+	w = 6.0 # default Omega0 param for morlet2 (5.0). Seems to control frequency of complex sine part?
 
-	data = data - np.mean(data) # remove DC offset, otherwise a lot of power at very low frequencies
+	data = data - np.mean(data) # remove DC offset, otherwise a lot of power at very low frequencies	
+	data = reflect(data)
 	
+
 	#freqs = np.array([1/(24*60*60), 1/(18*60*60),1/(14*60*60),1/(12*60*60),1/(10*60*60),1/(8*60*60),1/(6*60*60),1/(4*60*60),1/(2*60*60),1/(1*60*60)])	
 	#freqs = np.linspace(freqs[0], freqs[-1], 10000)
 	#freqs = np.linspace(0, freqs[-1], 10000)
@@ -355,24 +395,26 @@ def wavelet_transform(data, gaps):
 	#periods = 1/freqs
 	#periods = np.array([days*24*60*60 for days in range(13, 1, -1)] + [hours*60*60 for hours in range(47, 0, -1)])
 	#periods = np.array([hours*60*60 for hours in range(288, 0, -1)])
-	periods = np.array([hours*60*60 for hours in range(73, 0, -1)])
+	periods = np.array([hours*60*60 for hours in np.arange(73, 0, -1)])
 	freqs = 1/periods
 	
 	widths = w * fs / (2 * freqs * np.pi)
 
-	cwtmatr = signal.cwt(data, signal.morlet2, widths, w=w)
+	cwtmatr = signal.cwt(data, signal.morlet2, widths, w=w, dtype=np.complex128)
 	cwtmatr_yflip = cwtmatr	
 	#cwtmatr_yflip = np.flipud(cwtmatr) # TODO can keep this, just need to flip y axis labels
 	cwtmatr_yflip = np.abs(cwtmatr_yflip) # this isn't in tutorial (as tehy are using ricker wavelet, not complex morlet, i presume), imshow won't work without
+	
+	cwtmatr_yflip = np.apply_along_axis(remove_reflect, 1, cwtmatr_yflip)
+
+	#cwtmatr_yflip = np.power(cwtmatr_yflip, 2)
 
 	fig, axs = plt.subplots(3,1,sharex=True, height_ratios=[2, 1, 7])
-
 	interpolation = "antialiased"#"none"
 	#axs[2].imshow(cwtmatr_yflip, vmax = abs(cwtmatr).max(), vmin = -abs(cwtmatr).max(), aspect="auto", interpolation=interpolation)
 	#axs[2].imshow(cwtmatr_yflip, vmax = abs(cwtmatr).max(), vmin = 0, aspect="auto", interpolation=interpolation)
-	pos = axs[2].imshow(cwtmatr_yflip, aspect="auto", interpolation=interpolation)
+	pos = axs[2].imshow(cwtmatr_yflip, aspect="auto", interpolation=interpolation, cmap='Greens_r')
 	#cbar = fig.colorbar(pos, ax=axs[2])
-
 	"""	
 	yticks = ax.get_yticks()
 	yticks = yticks[yticks>=0]
@@ -380,24 +422,17 @@ def wavelet_transform(data, gaps):
 	axs[1].set_yticks(ticks = yticks, labels=periods[np.int32(yticks)])
 	"""
 	axs[2].set_yticks(ticks=range(0, len(cwtmatr)), labels=np.floor(periods/60/60))
-
 	axs[2].set_ylabel("Period (h)")
-
 	axs[2].set_title("Wavelet Transform Time-Frequency", loc="right")
-
-
-	axs[0].plot(range(0, len(data)), data, color="black", alpha=0.5)
-	axs[0].plot(range(0, len(data)), cut_gaps(data, gaps), color="black")
-	axs[0].set_title("Original Data", loc="right")
-
 
 	lowcut=1/(33*60*60)
 	highcut=1/(21*60*60) 
 	fs=fs 
 	order=4
 	test_butter_bandpass(lowcut, highcut, fs, order)
-	axs[1].plot(butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order), c="r", label="Circadian Band (21h-33h)")
-
+	circadian_bandpass = butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order)
+	axs[1].plot(remove_reflect(circadian_bandpass), c="r", alpha=0.5)
+	axs[1].plot(cut_gaps(remove_reflect(circadian_bandpass), gaps), c="r", label="Circadian Band (21h-33h)")
 	axs[1].set_title("Bandpass-filtered Circadian Rhythm (21h-33h)", loc="right")
 
 	"""
@@ -409,25 +444,67 @@ def wavelet_transform(data, gaps):
 	axs[1].set_xticks(ticks=original_xticks, labels=timevec_h[original_xticks])
 	"""
 
+	data = remove_reflect(data)
+	axs[0].plot(range(0, len(data)), data, color="black", alpha=0.5)
+	axs[0].plot(range(0, len(data)), cut_gaps(data, gaps), color="black")
+	axs[0].set_title("Original Data", loc="right")
+	
+
 	fig.show()	
 
+def simulate_data():
+
+	
+	segment_len_s = 300
+
+	n_days = 3 # similar length to 909
+	n_segments = (n_days * (24*60))/5 # how many segments of len segment_len_s?
+	data_length = n_segments * segment_len_s # this is so we can use the same sample rates
+	timevec = np.arange(0, data_length, segment_len_s)
+ 
+
+	def rhythym(hours, A=10, phi=0):
+		# A = amplitude; sinewave will be centered around 0, with max amplitude at A and minimum at -A 
+		# phi = phase - where, in radians, the cycle is at t=0
+		return A * np.sin((2*np.pi*(1/(hours*60*60))*timevec) + phi)
+
+	circadian1 = rhythym(24, 10, 0); data = circadian1
+	#circadian2 = rhythym(19, 10, 0); data += circadian2
+	#multidien = rhythym(50, 10, 0);  data += multidien
+	#ultradian1 = rhythym(5, 10, 0);  data += ultradian1
+	ultradian2 = rhythym(1, 10, 0);  data += ultradian2
+	
+	shift = 85 #add this to sinewave, to shift it from being mean-centered, so it resembles a mean IHR
+	data += shift
+
+	#data = multidien + circadian + (ultradian(1, 20) * np.hanning(n_segments)) + shift
+
+	return data	
+
+
 if __name__ == "__main__":
-	subject = "909"
+	subject = "95"
 	root = f"/home/bcsm/University/stage-4/MSc_Project/UCLH/{subject}"
 	out = f"out/{subject}"
 
-	# collate data and resolve overlaps
-	run_speedyf(root, out); 
+	if not subject=="sim":
+		# collate data and resolve overlaps
+		#run_speedyf(root, out); 
+		
+		# produce hrv metric dataframes, and save to out/
+		calculate_hrv_metrics(root, out) # will not re-calculate if dataframes already present in out
+
+		# load the hrv metric dataframes we just produced
+		time_dom_df, freq_dom_df, modification_report_df = load_hrv_dataframes(out)
+
+		# what metric are we interested in?
+		data = time_dom_df["hr_mean"]
+		data = np.array(data)
 	
-	# produce hrv metric dataframes, and save to out/
-	calculate_hrv_metrics(root, out) # will not re-calculate if dataframes already present in out
+	else:
+		data = simulate_data()
 
-	# load the hrv metric dataframes we just produced
-	time_dom_df, freq_dom_df, modification_report_df = load_hrv_dataframes(out)
 
-	# what metric are we interested in?
-	data = time_dom_df["hr_mean"]
-	data = np.array(data)
 
 	# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
 	interpolated, gaps = interpolate_gaps(data) 
