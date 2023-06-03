@@ -11,12 +11,13 @@ import pandas as pd
 import os
 import sys
 
+import constants
+
+sys.path.append(constants.SPEEDYF_LOCATION)
 from speedyf import edf_collate, edf_overlaps, edf_segment
 
-sys.path.append("/home/bcsm/University/stage-3/BSc_Project/summer_proj/VNS_2")
+sys.path.append(constants.HRV_PREPROC_LOCATION)
 from hrv_preprocessor.hrv_preprocessor import hrv_per_segment, produce_hrv_dataframes, save_hrv_dataframes, load_hrv_dataframes
-
-from filtering import butter_lowpass_filter
 
 # TODO REMEMBER TO CITE PACKAGES
 import emd  # EMD, EEMD
@@ -25,8 +26,18 @@ import vmdpy # Variational Mode Decomposition
 
 np.random.seed(1905)
 
-def butter_bandpass(lowcut, highcut, fs, order=5):
-    
+def butter_lowpass(cutoff, fs, order=5):
+	nyq = 0.5 * fs
+	normal_cutoff = cutoff / nyq
+	sos = butter(order, normal_cutoff, btype="low", analog=False,output="sos")
+	return sos
+
+def butter_lowpass_filter(data, cutoff, fs, order=5):
+	sos = butter_lowpass(cutoff, fs, order=order)
+	y = sosfiltfilt(sos, data)
+	return y
+
+def butter_bandpass(lowcut, highcut, fs, order=5):    
 	sos = butter(order, [lowcut, highcut], btype="bandpass", fs=fs, analog=False,output="sos")
 	return sos
 
@@ -540,8 +551,8 @@ def simulate_data():
 
 if __name__ == "__main__":
 	subject = "95"
-	root = f"/home/bcsm/University/stage-4/MSc_Project/UCLH/{subject}"
-	out = f"out/{subject}"
+	root = constants.SUBJECT_DATA_ROOT.format(subject=subject)
+	out = constants.SUBJECT_DATA_OUT.format(subject=subject)
 
 	if not subject=="sim":
 		# collate data and resolve overlaps
