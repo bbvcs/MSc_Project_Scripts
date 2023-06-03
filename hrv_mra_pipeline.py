@@ -242,61 +242,79 @@ def run_speedyf(root, out):
 
 def calculate_hrv_metrics(root, out, forced=False):
 
-
-	try:
-		load_hrv_dataframes(out)
-		
-		if not forced:
-			print("HRV Metrics Dataframes appear to exist, and parameter forced=False, so HRV Metrics will not be re-calculated.") 
-			return
-
-	except FileNotFoundError:
-			pass
+	subject_out = out
 
 	segmenter = edf_segment.EDFSegmenter(root, out, segment_len_s=300, cache_lifetime=1)	
 
-	segmenter.set_used_channels(["ECG"])
+	ecg_channels = [ch for ch in segmenter.get_available_channels() if "ecg" in ch.lower()]
+	if len(ecg_channels) == 0: raise KeyError("No channels with names containing 'ECG' could be found!")
+	segmenter.set_used_channels(ecg_channels)
+
+
+	for ecg_channel in ecg_channels:
+
+		try:
+			if not len(ecg_channels) == 1:
+				load_hrv_dataframes(os.path.join(subject_out, ecg_channel))
+			else:
+				load_hrv_dataframes(out)			
+
+			if not forced:
+				print("HRV Metrics Dataframes appear to exist, and parameter forced=False, so HRV Metrics will not be re-calculated.") 
+				return
+
+		except FileNotFoundError:
+				pass
+
 	
-	freq_dom_hrvs = []
-	time_dom_hrvs = []
-	modification_reports = []
+	for ecg_channel in ecg_channels:
+
+		if not len(ecg_channels) == 1:
+			print(f"Running for ECG channel {ecg_channel}")
+			out = os.path.join(subject_out, ecg_channel)
+			if not os.path.exists(out):
+				print(f"Setting up directory for {ecg_channel} HRV output (subject has multiple ECG channels): at '{out}'")
+				os.makedirs(out, exist_ok=True)
+
+		freq_dom_hrvs = []
+		time_dom_hrvs = []
+		modification_reports = []
+
+		# TODO keys defined again in produce hrv_dataframes
+		time_dom_keys = np.array(['nni_counter', 'nni_mean', 'nni_min', 'nni_max', 'hr_mean', 'hr_min', 'hr_max', 'hr_std', 'nni_diff_mean', 'nni_diff_min', 'nni_diff_max', 'sdnn', 'sdnn_index', 'sdann', 'rmssd', 'sdsd', 'nn50', 'pnn50', 'nn20', 'pnn20', 'nni_histogram', 'tinn_n', 'tinn_m', 'tinn', 'tri_index'])
+		freq_dom_keys = np.array(['fft_bands', 'fft_peak', 'fft_abs', 'fft_rel', 'fft_log', 'fft_norm', 'fft_ratio', 'fft_total', 'fft_plot', 'fft_nfft', 'fft_window', 'fft_resampling_frequency', 'fft_interpolation'])
 
 
-	# TODO keys defined again in produce hrv_dataframes
-	time_dom_keys = np.array(['nni_counter', 'nni_mean', 'nni_min', 'nni_max', 'hr_mean', 'hr_min', 'hr_max', 'hr_std', 'nni_diff_mean', 'nni_diff_min', 'nni_diff_max', 'sdnn', 'sdnn_index', 'sdann', 'rmssd', 'sdsd', 'nn50', 'pnn50', 'nn20', 'pnn20', 'nni_histogram', 'tinn_n', 'tinn_m', 'tinn', 'tri_index'])
-	freq_dom_keys = np.array(['fft_bands', 'fft_peak', 'fft_abs', 'fft_rel', 'fft_log', 'fft_norm', 'fft_ratio', 'fft_total', 'fft_plot', 'fft_nfft', 'fft_window', 'fft_resampling_frequency', 'fft_interpolation'])
+		for segment in segmenter:
+			print(f"{segment.idx}/{segmenter.get_max_segment_count()}")
+
+			ecg = segment.data[ecg_channel].to_numpy()
+			if len(ecg) != 0:
+				ecg = butter_lowpass_filter(ecg, 22, 512, 4)
+
+			#eps = 0.125
+			eps = 0.14
+
+			rpeaks, rri, rri_corrected, freq_dom_hrv, time_dom_hrv, modification_report = hrv_per_segment(ecg, segment.sample_rate, 5, segment_idx=segment.idx, save_plots_dir=os.path.join(out, "saved_plots"), save_plots=True, save_plot_filename=segment.idx, use_segmenter="engzee", DBSCAN_RRI_EPSILON_MEAN_MULTIPLIER=eps, DBSCAN_MIN_SAMPLES=70)
+			#print(modification_report["notes"])
+			
+			if not isinstance(freq_dom_hrv, float):
+				freq_dom_hrvs.append(np.array(freq_dom_hrv, dtype="object"))
+			else:
+				freq_dom_hrvs.append(np.full(shape=freq_dom_keys.shape, fill_value=np.NaN))
+
+			if not isinstance(time_dom_hrv, float):
+				time_dom_hrvs.append(np.array(time_dom_hrv))
+			else:
+				time_dom_hrvs.append(np.full(shape=time_dom_keys.shape, fill_value=np.NaN))
+
+			modification_reports.append(modification_report)
 
 
-	for segment in segmenter:
-		print(f"{segment.idx}/{segmenter.get_max_segment_count()}")
-
-		ecg = segment.data["ECG"].to_numpy()
-		if len(ecg) != 0:
-			ecg = butter_lowpass_filter(ecg, 22, 512, 4)
-
-		#eps = 0.125
-		eps = 0.14
-
-		rpeaks, rri, rri_corrected, freq_dom_hrv, time_dom_hrv, modification_report = hrv_per_segment(ecg, segment.sample_rate, 5, segment_idx=segment.idx, save_plots_dir=os.path.join(out, "saved_plots"), save_plots=True, save_plot_filename=segment.idx, use_segmenter="engzee", DBSCAN_RRI_EPSILON_MEAN_MULTIPLIER=eps, DBSCAN_MIN_SAMPLES=70)
-		#print(modification_report["notes"])
+		segment_labels = np.array(range(0, segmenter.get_max_segment_count()))
 		
-		if not isinstance(freq_dom_hrv, float):
-			freq_dom_hrvs.append(np.array(freq_dom_hrv, dtype="object"))
-		else:
-			freq_dom_hrvs.append(np.full(shape=freq_dom_keys.shape, fill_value=np.NaN))
-
-		if not isinstance(time_dom_hrv, float):
-			time_dom_hrvs.append(np.array(time_dom_hrv))
-		else:
-			time_dom_hrvs.append(np.full(shape=time_dom_keys.shape, fill_value=np.NaN))
-
-		modification_reports.append(modification_report)
-
-
-	segment_labels = np.array(range(0, segmenter.get_max_segment_count()))
-	
-	time_dom_df, freq_dom_df, modification_report_df = produce_hrv_dataframes(time_dom_hrvs, freq_dom_hrvs, modification_reports, segment_labels)	
-	save_hrv_dataframes(time_dom_df, freq_dom_df, modification_report_df, out)	
+		time_dom_df, freq_dom_df, modification_report_df = produce_hrv_dataframes(time_dom_hrvs, freq_dom_hrvs, modification_reports, segment_labels)	
+		save_hrv_dataframes(time_dom_df, freq_dom_df, modification_report_df, out)	
 
 def get_gaps_positions(data):
 	# get idx of runs of NaNs in data
@@ -550,13 +568,13 @@ def simulate_data():
 
 
 if __name__ == "__main__":
-	subject = "95"
+	subject = "1220"
 	root = constants.SUBJECT_DATA_ROOT.format(subject=subject)
 	out = constants.SUBJECT_DATA_OUT.format(subject=subject)
 
 	if not subject=="sim":
 		# collate data and resolve overlaps
-		#run_speedyf(root, out); 
+		run_speedyf(root, out); 
 		
 		# produce hrv metric dataframes, and save to out/
 		calculate_hrv_metrics(root, out) # will not re-calculate if dataframes already present in out
