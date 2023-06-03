@@ -25,7 +25,6 @@ import vmdpy # Variational Mode Decomposition
 
 np.random.seed(1905)
 
-
 def butter_bandpass(lowcut, highcut, fs, order=5):
     
 	sos = butter(order, [lowcut, highcut], btype="bandpass", fs=fs, analog=False,output="sos")
@@ -164,6 +163,7 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 	fig2.savefig(os.path.join(out, title+"_PSD"))
 
 
+	peaks = []
 	# produce plot of stacked IMFs with peaks highlighted 
 	cmap = matplotlib.colormaps["ocean"]
 	fig3, ax3 = plt.subplots(figsize=(10.80, 10.80)) 
@@ -179,6 +179,8 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 		label = f"Component #{i}, peak period = {peak_period_h[0]}h"
 		color = cmap(1/len(components) * i)
 		
+		peaks.append(peak_period_h)
+
 		ax3.plot(f, Pxx_den, c=color, label=label)
 		ax3.fill_between(f, Pxx_den, color=color)	
 		ax3.scatter(peak_freq, peak_Pxx, marker="x", c="r", zorder=10)
@@ -189,7 +191,7 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 	fig3.suptitle(title+" Components PSDs Overlaid")
 	fig3.savefig(os.path.join(out, title+"_PSD_OVERLAY"))
 
-	return fig, ax
+	return peaks
 
 
 def my_fft(data, sample_rate):
@@ -345,13 +347,13 @@ def mra(data, gaps, sharey=False):
 	# perform EMD
 	title = f"MeanIHR_EMD"
 	imfs = emd.sift.sift(data).T
-	fig_emd, ax_emd = components_plot(imfs, data, out, title, gaps, sharey=sharey)
+	emd_peaks = components_plot(imfs, data, out, title, gaps, sharey=sharey)
 	
 	# perform EEMD
 	title = f"MeanIHR_EEMD"
 	imfs = emd.sift.ensemble_sift(data, nensembles=4, nprocesses=3, ensemble_noise=1).T
 	imfs = imfs[1:]
-	fig_eemd, ax_eemd = components_plot(imfs, data, out, title, gaps, sharey=sharey)
+	eemd_peaks = components_plot(imfs, data, out, title, gaps, sharey=sharey)
 	
 	# perform VMD
 	title = f"MeanIHR_VMD"
@@ -363,7 +365,7 @@ def mra(data, gaps, sharey=False):
 	tol = 1e-7
 	u, u_hat, omega = vmdpy.VMD(data, alpha, tau, K, DC, init, tol)
 	u = np.flipud(u)
-	fig_vmd, ax_vmd = components_plot(u, data, out, title, gaps, sharey=sharey)
+	vmd_peaks = components_plot(u, data, out, title, gaps, sharey=sharey)
 
 	# perform WT MRA
 	title = f"MeanIHR_WT"
@@ -372,8 +374,63 @@ def mra(data, gaps, sharey=False):
 	data_wt = data if len(data) % 2 == 0 else data[:-1]
 	output = pywt.mra(data_wt, wavelet, transform="dwt")
 	output = np.flip(output, axis=0)
-	fig_dwt, ax_dwt = components_plot(output, data_wt, out, title, gaps, sharey=sharey)	
+	wt_peaks = components_plot(output, data_wt, out, title, gaps, sharey=sharey)	
 
+	# filter out the peaks identified	
+	peaks = eemd_peaks # which decomposition method's peaks will we use?
+	
+	fig, axs = plt.subplots(len(peaks)+2, 1, sharex=True,) 
+	plt.subplots_adjust(bottom=0.04, top=0.921, hspace=0.402)
+
+	data = reflect(data)
+	
+	fontsize = "smaller"
+
+	axs[0].plot(remove_reflect(data), alpha=0.5, color="black")
+	axs[0].plot(cut_gaps(remove_reflect(data), gaps), color="black")
+	axs[0].set_title("Original Data", loc="left", fontsize=fontsize)
+
+	filtered_data = []
+	for i, peak in enumerate(peaks):
+
+		fs = 1/300 # TODO this should be param
+		order=4
+	
+		
+		if 1/((peak)*60*60) < fs/2:
+			lowcut=1/((peak+1)*60*60)
+			
+			if peak > 1:
+				highcut_period = peak-1
+			else: 
+				highcut_period = peak/2
+
+			highcut = 1/((highcut_period)*60*60) 
+
+			if highcut < fs/2:
+
+
+				test_butter_bandpass(lowcut, highcut, fs, order)
+
+				bandpass_filtered = butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order)
+				
+				color = "dodgerblue"
+				axs[i+1].plot(remove_reflect(bandpass_filtered), alpha=0.5, color=color)
+				axs[i+1].plot(cut_gaps(remove_reflect(bandpass_filtered), gaps), color=color)
+				axs[i+1].set_title(f"Peak @ {peak[0]}h (Filtered {np.round(highcut_period[0], decimals=2)}h - {np.round((peak+1)[0], decimals=2)}h)", loc="left", fontsize=fontsize)
+				
+				filtered_data.append(bandpass_filtered)
+			else: print(f"Highcut Frequency {highcut} exceeds Nyquist {fs/2}, so skipping this Peak")
+		else: print(f"Peak Frequency {1/(peak*60*60)} exceeds Nyquist {fs/2}, so skipping this Peak")
+
+
+	filtered_data = np.sum(np.array(filtered_data), axis=0,)
+	axs[-1].plot(remove_reflect(filtered_data), alpha=0.5, color="black")
+	axs[-1].plot(cut_gaps(remove_reflect(filtered_data), gaps), color="black")
+	axs[-1].set_title("Filtered Signal Summation", loc="left", fontsize=fontsize)
+
+
+	fig.show()
 
 def wavelet_transform(data, gaps):
 
@@ -429,7 +486,6 @@ def wavelet_transform(data, gaps):
 	highcut=1/(21*60*60) 
 	fs=fs 
 	order=4
-	test_butter_bandpass(lowcut, highcut, fs, order)
 	circadian_bandpass = butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order)
 	axs[1].plot(remove_reflect(circadian_bandpass), c="r", alpha=0.5)
 	axs[1].plot(cut_gaps(remove_reflect(circadian_bandpass), gaps), c="r", label="Circadian Band (21h-33h)")
@@ -499,6 +555,7 @@ if __name__ == "__main__":
 
 		# what metric are we interested in?
 		data = time_dom_df["hr_mean"]
+		#data = freq_dom_df["fft_ratio"]
 		data = np.array(data)
 	
 	else:
