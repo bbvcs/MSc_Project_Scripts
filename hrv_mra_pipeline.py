@@ -27,8 +27,6 @@ import emd  # EMD, EEMD
 import pywt # Wavelet Transform?
 import vmdpy # Variational Mode Decomposition
 
-np.random.seed(1905)
-
 
 """ UTILITY FUNCTIONS """
 
@@ -97,7 +95,7 @@ def components_plot_old(components, original, out, title, gaps, sharey=True):
 	return fig, ax
 
 
-def components_plot(timevec, components, original, out, title, gaps, sharey=True):
+def components_plot(timevec, components, original, out, title, gaps, onsets, durations, sharey=True):
 
 	out = os.path.join(out, "components_plots")
 	if not os.path.exists(out):
@@ -105,8 +103,8 @@ def components_plot(timevec, components, original, out, title, gaps, sharey=True
 		os.makedirs(out, exist_ok=True)
 
 
-	fig1, ax1 = plt.subplots(len(components)+2, 1, sharex=True, sharey=sharey, figsize=(19.20, 19.20))
-	fig2, ax2 = plt.subplots(len(components)+2, 1, sharex=False, sharey=True, figsize=(19.20, 19.20))
+	fig1, ax1 = plt.subplots(len(components)+2, 1, sharex=True, sharey=sharey, figsize=(19.20, 19.20)) # the components
+	fig2, ax2 = plt.subplots(len(components)+2, 1, sharex=False, sharey=True, figsize=(19.20, 19.20)) # PSDs of the components
 	plt.subplots_adjust(bottom=0.04, top=0.921, hspace=0.402)
 
 	#x_original = range(0, len(original))
@@ -171,6 +169,10 @@ def components_plot(timevec, components, original, out, title, gaps, sharey=True
 	fig1.suptitle(title)
 	for ax in ax1:
 		ax.xaxis.set_major_formatter(DateFormatter("%d/%m %H:%M:%S"))
+		
+		for onset, duration in zip(onsets, durations):
+			ax.axvspan(onset, onset + datetime.timedelta(seconds=duration), color="r", alpha=0.5)
+	
 	fig1.supxlabel("Time (d/m h:m:s)")
 	fig1.savefig(os.path.join(out, title))
 
@@ -300,6 +302,16 @@ def interpolate_gaps(data, timevec):
 	return interpolated, timevec, gaps
 
 
+def get_seizures(subject):
+
+	severity_table = pd.read_excel("/home/bcsm/University/stage-4/MSc_Project/UCLH/SeverityTable.xlsx")
+
+	subject_seizures = severity_table[severity_table.patient_id == subject]
+	# lots of extra useful information in here, not just start
+
+	return subject_seizures["start"], subject_seizures["duration"]
+
+
 """ PIPELINE FUNCTIONS """
 
 def run_speedyf(root, out):
@@ -310,7 +322,7 @@ def run_speedyf(root, out):
 		edf_overlaps.resolve(root, out)
 
 
-def calculate_hrv_metrics(root, out, forced=False):
+def calculate_hrv_metrics(root, out, rng, forced=False):
 
 	subject_out = out
 
@@ -365,7 +377,7 @@ def calculate_hrv_metrics(root, out, forced=False):
 			#eps = 0.125
 			eps = 0.14
 
-			rpeaks, rri, rri_corrected, freq_dom_hrv, time_dom_hrv, modification_report = hrv_per_segment(ecg, segment.sample_rate, 5, segment_idx=segment.idx, save_plots_dir=os.path.join(out, "saved_plots"), save_plots=True, save_plot_filename=segment.idx, use_segmenter="engzee", DBSCAN_RRI_EPSILON_MEAN_MULTIPLIER=eps, DBSCAN_MIN_SAMPLES=70)
+			rpeaks, rri, rri_corrected, freq_dom_hrv, time_dom_hrv, modification_report = hrv_per_segment(ecg, segment.sample_rate, 5, segment_idx=segment.idx, save_plots_dir=os.path.join(out, "saved_plots"), save_plots=True, save_plot_filename=segment.idx, use_segmenter="engzee", DBSCAN_RRI_EPSILON_MEAN_MULTIPLIER=eps, DBSCAN_MIN_SAMPLES=70, rng=rng)
 			#print(modification_report["notes"])
 			
 			if not isinstance(freq_dom_hrv, float):
@@ -387,30 +399,30 @@ def calculate_hrv_metrics(root, out, forced=False):
 		save_hrv_dataframes(time_dom_df, freq_dom_df, modification_report_df, out)	
 
 
-def mra(timevec, data, gaps, sharey=False):
+def mra(timevec, data, gaps, onsets, durations, sharey=False):
 		
 	# perform EMD
 	title = f"MeanIHR_EMD"
 	imfs = emd.sift.sift(data).T
-	emd_peaks = components_plot(timevec, imfs, data, out, title, gaps, sharey=sharey)
+	emd_peaks = components_plot(timevec, imfs, data, out, title, gaps, onsets, durations, sharey=sharey)
 	
 	# perform EEMD
 	title = f"MeanIHR_EEMD"
 	imfs = emd.sift.ensemble_sift(data, nensembles=4, nprocesses=3, ensemble_noise=1).T
 	imfs = imfs[1:]
-	eemd_peaks = components_plot(timevec, imfs, data, out, title, gaps, sharey=sharey)
+	eemd_peaks = components_plot(timevec, imfs, data, out, title, gaps, onsets, durations, sharey=sharey)
 	
 	# perform VMD
 	title = f"MeanIHR_VMD"
 	alpha = 2000  # moderate bandwidth constraint  
 	tau = 0.      # noise-tolerance (no strict fidelity enforcement)  
-	K = 2         # n of modes to be recovered  
+	K = 6         # n of modes to be recovered  
 	DC = 0        # no DC part imposed  
 	init = 1      # initialize omegas uniformly 
 	tol = 1e-7
 	u, u_hat, omega = vmdpy.VMD(data, alpha, tau, K, DC, init, tol)
 	u = np.flipud(u)
-	vmd_peaks = components_plot(timevec, u, data, out, title, gaps, sharey=sharey)
+	vmd_peaks = components_plot(timevec, u, data, out, title, gaps, onsets, durations, sharey=sharey)
 
 	# perform WT MRA
 	title = f"MeanIHR_WT"
@@ -420,7 +432,7 @@ def mra(timevec, data, gaps, sharey=False):
 	timevec_wt = timevec if len(timevec) % 2 == 0 else timevec[:-1]
 	output = pywt.mra(data_wt, wavelet, transform="dwt")
 	output = np.flip(output, axis=0)
-	wt_peaks = components_plot(timevec_wt, output, data_wt, out, title, gaps, sharey=sharey)	
+	wt_peaks = components_plot(timevec_wt, output, data_wt, out, title, gaps, onsets, durations, sharey=sharey)	
 
 	# filter out the peaks identified	
 	peaks = eemd_peaks # which decomposition method's peaks will we use?
@@ -478,11 +490,15 @@ def mra(timevec, data, gaps, sharey=False):
 	
 	for ax in axs:
 		ax.xaxis.set_major_formatter(DateFormatter("%d/%m %H:%M:%S"))
+		
+		for onset, duration in zip(onsets, durations):
+			ax.axvspan(onset, onset + datetime.timedelta(seconds=duration), color="r", alpha=0.5)
+	
 	fig.supxlabel("Time (d/m h:m:s)")
 
-	fig.savefig(os.path.join(out, "Filtered_Peaks"))
+	fig.savefig(os.path.join(out, "components_plots", "Filtered_Peaks"))
 
-def wavelet_transform(timevec, data, gaps):
+def wavelet_transform(timevec, data, gaps, onsets, durations):
 
 
 	fs = 1/300 # TODO this needs to be param
@@ -557,6 +573,11 @@ def wavelet_transform(timevec, data, gaps):
 
 	for ax in axs:
 		ax.xaxis.set_major_formatter(DateFormatter("%d/%m %H:%M:%S"))
+		
+		#for onset, duration in zip(onsets, durations):
+		#	ax.axvspan(onset, onset + datetime.timedelta(seconds=duration), color="r", alpha=0.5)
+
+
 	fig.supxlabel("Time (d/m h:m:s)")
 	
 	fig.show()	
@@ -581,7 +602,7 @@ def simulate_data():
 	#circadian2 = rhythym(19, 10, 0); data += circadian2
 	#multidien = rhythym(50, 10, 0);  data += multidien
 	#ultradian1 = rhythym(5, 10, 0);  data += ultradian1
-	ultradian2 = rhythym(3, 100, 0);  data += ultradian2
+	ultradian2 = rhythym(3, 10, 0);  data += ultradian2
 	
 	shift = 85 #add this to sinewave, to shift it from being mean-centered, so it resembles a mean IHR
 	data += shift
@@ -592,16 +613,18 @@ def simulate_data():
 
 
 if __name__ == "__main__":
-	subject = "sim"
+	subject = "865"
 	root = constants.SUBJECT_DATA_ROOT.format(subject=subject)
 	out = constants.SUBJECT_DATA_OUT.format(subject=subject)
+
+	rng = np.random.default_rng(1905)
 
 	if not subject=="sim":
 		# collate data and resolve overlaps
 		run_speedyf(root, out); 
 		
 		# produce hrv metric dataframes, and save to out/
-		calculate_hrv_metrics(root, out) # will not re-calculate if dataframes already present in out
+		calculate_hrv_metrics(root, out, rng)# will not re-calculate if dataframes already present in out
 
 		# load the hrv metric dataframes we just produced
 		time_dom_df, freq_dom_df, modification_report_df = load_hrv_dataframes(out)
@@ -611,18 +634,26 @@ if __name__ == "__main__":
 		#data = freq_dom_df["fft_ratio"]
 		data = np.array(data)
 	
+		# get timestamps corresponding to segments
 		timevec = edf_segment.EDFSegmenter(root, out, segment_len_s=300).get_segment_onsets(as_datetime=True)
+		
+		# get timestamps corresponding to seizures and their durations
+		onsets, durations = get_seizures(subject)
 	
 	else:
 		data = simulate_data()
+
 		timevec = [datetime.datetime.fromtimestamp(0) + datetime.timedelta(seconds=(i * 300)) for i in range(0, len(data))]
 
+		onsets = durations = []
+
+	
 
 	# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
 	interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
 
 	# perform multi-resolution analysis (signal decomposition)	
-	#mra(timevec, interpolated, gaps, sharey=False)
+	mra(timevec, interpolated, gaps, onsets, durations, sharey=False)
 
 	# perform time-frequency analysis using wavelet_transform
-	wavelet_transform(timevec, interpolated, gaps)	
+	wavelet_transform(timevec, interpolated, gaps, onsets, durations)	

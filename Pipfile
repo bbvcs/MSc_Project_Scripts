@@ -18,6 +18,7 @@ dtw-python = "*"
 vmdpy = "*"
 pywavelets = "*"
 emd-signal = "*"
+openpyxl = "*"
 
 [dev-packages]
 
