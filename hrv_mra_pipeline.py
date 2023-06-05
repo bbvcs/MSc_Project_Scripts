@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.dates import DateFormatter
 import seaborn as sns
 from scipy import fft
 from scipy import interpolate
@@ -10,6 +11,8 @@ import pandas as pd
 
 import os
 import sys
+import json
+import datetime
 
 import constants
 
@@ -25,6 +28,9 @@ import pywt # Wavelet Transform?
 import vmdpy # Variational Mode Decomposition
 
 np.random.seed(1905)
+
+
+""" UTILITY FUNCTIONS """
 
 def butter_lowpass(cutoff, fs, order=5):
 	nyq = 0.5 * fs
@@ -91,7 +97,7 @@ def components_plot_old(components, original, out, title, gaps, sharey=True):
 	return fig, ax
 
 
-def components_plot(components, original, out, title, gaps, sharey=True):
+def components_plot(timevec, components, original, out, title, gaps, sharey=True):
 
 	out = os.path.join(out, "components_plots")
 	if not os.path.exists(out):
@@ -99,11 +105,14 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 		os.makedirs(out, exist_ok=True)
 
 
-	fig, ax = plt.subplots(len(components)+2, 1, sharex=True, sharey=sharey, figsize=(19.20, 19.20))
+	fig1, ax1 = plt.subplots(len(components)+2, 1, sharex=True, sharey=sharey, figsize=(19.20, 19.20))
 	fig2, ax2 = plt.subplots(len(components)+2, 1, sharex=False, sharey=True, figsize=(19.20, 19.20))
+	plt.subplots_adjust(bottom=0.04, top=0.921, hspace=0.402)
 
-	x_original = range(0, len(original))
-	x_imfs = range(0, components.shape[1])
+	#x_original = range(0, len(original))
+	#x_imfs = range(0, components.shape[1])
+	x_original = timevec
+	x_imfs = timevec[0: components.shape[1]]
 	alpha = 0.3 # transparency of the interpolated sections
 	c = "blueviolet" # color of components
 	
@@ -117,9 +126,9 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 	ax2_xlim = [0, 1/(60*60)] # 0 -> 1h period
 	ax2_xticklab_rot = 45
 
-	ax[0].plot(x_original, original, color="black", alpha=alpha)
-	ax[0].plot(x_original, cut_gaps(original, gaps), color="black")
-	ax[0].set_title("Original", loc="left")
+	ax1[0].plot(x_original, original, color="black", alpha=alpha)
+	ax1[0].plot(x_original, cut_gaps(original, gaps), color="black")
+	ax1[0].set_title("Original", loc="left")
 
 	#f, Pxx_den = signal.welch(original, fs, nperseg=nperseg)	
 	f, Pxx_den = my_fft(original, fs)
@@ -131,9 +140,9 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 	ax2[0].set_title("Original", loc="left")
 
 	reconstruction = np.sum(components, axis=0)
-	ax[1].plot(x_imfs, reconstruction, color="black", alpha=alpha)
-	ax[1].plot(x_imfs, cut_gaps(reconstruction, gaps), color="black")
-	ax[1].set_title("Reconstruction", loc="left")	
+	ax1[1].plot(x_imfs, reconstruction, color="black", alpha=alpha)
+	ax1[1].plot(x_imfs, cut_gaps(reconstruction, gaps), color="black")
+	ax1[1].set_title("Reconstruction", loc="left")	
 	
 	#f, Pxx_den = signal.welch(reconstruction, fs, nperseg=nperseg)	
 	f, Pxx_den = my_fft(reconstruction, fs)
@@ -145,9 +154,9 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 	ax2[1].set_title("Reconstruction", loc="left")	
 	
 	for i, comp in enumerate(components):
-		ax[i+2].plot(x_imfs, comp, color=c, alpha=alpha)
-		ax[i+2].plot(x_imfs, cut_gaps(comp, gaps), color=c)
-		ax[i+2].set_title(f"Component #{i}", loc="left")
+		ax1[i+2].plot(x_imfs, comp, color=c, alpha=alpha)
+		ax1[i+2].plot(x_imfs, cut_gaps(comp, gaps), color=c)
+		ax1[i+2].set_title(f"Component #{i}", loc="left")
 
 		#f, Pxx_den = signal.welch(comp, fs, nperseg=nperseg)	
 		f, Pxx_den = my_fft(comp, fs)
@@ -159,7 +168,12 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 		ax2[i+2].set_xlim(ax2_xlim)
 		ax2[i+2].set_title(f"Component #{i}", loc="left")
 	
-	fig.suptitle(title)
+	fig1.suptitle(title)
+	for ax in ax1:
+		ax.xaxis.set_major_formatter(DateFormatter("%d/%m %H:%M:%S"))
+	fig1.supxlabel("Time (d/m h:m:s)")
+	fig1.savefig(os.path.join(out, title))
+
 	
 	fig2.suptitle(title+"_PSD")
 	fig2.supylabel("")
@@ -167,10 +181,6 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 	handles, labels = ax2[-1].get_legend_handles_labels() # get from last axis only, to avoid duplicates
 	fig2.legend(handles, labels)
 
-	plt.subplots_adjust(bottom=0.04, top=0.921, hspace=0.402)
-
-
-	fig.savefig(os.path.join(out, title))
 	fig2.savefig(os.path.join(out, title+"_PSD"))
 
 
@@ -200,6 +210,7 @@ def components_plot(components, original, out, title, gaps, sharey=True):
 	ax3.set_xscale("log")
 	fig3.legend(loc="upper right")
 	fig3.suptitle(title+" Components PSDs Overlaid")
+	fig3.supxlabel("Frequency (Hz)")
 	fig3.savefig(os.path.join(out, title+"_PSD_OVERLAY"))
 
 	return peaks
@@ -221,7 +232,6 @@ def fft_plot(data, sample_rate): # warn; can't use fft with HRV, irregularly sam
 
 	return fig, ax
 
-
 def reflect(data):
 	padlen = len(data) // 2
 	return np.pad(data, padlen, mode="constant")
@@ -231,6 +241,66 @@ def remove_reflect(data):
 	padlen = len(data) // 4	 # AS LONG AS padlen = len(data)//2 in reflect(), this should work?
 	return data[padlen:-padlen]
 
+def get_gaps_positions(data):
+	# get idx of runs of NaNs in data
+	# (start_idx, end_idx) inclusive; so start:end+1 is the run. data[end] is NaN, data[end+1] shouldn't be.
+	gaps = []
+	on_NaN = False
+	p = 0
+	while p < len(data):
+	    if np.isnan(data[p]) and not on_NaN:
+		    NaN_start = p
+		    on_NaN = True
+	    elif on_NaN and not np.isnan(data[p]):
+		    NaN_end = p-1
+		    gaps.append((NaN_start, NaN_end))
+		    on_NaN = False
+
+	    if p == len(data)-1:
+		    if on_NaN:
+			    NaN_end = p
+			    gaps.append((NaN_start, NaN_end))
+
+	    p += 1
+
+	return gaps
+
+
+def cut_gaps(data, gaps):
+	
+	copy = data.copy()
+	
+	for gap in gaps:
+		copy[gap[0]:gap[1]+1] = np.NaN
+
+	return copy
+
+def interpolate_gaps(data, timevec):
+
+	gaps = get_gaps_positions(data)
+	# remove gaps that start at start/end at end (will not be interpolated, and will mess up decomposition)
+	if len(gaps) > 0:
+		if gaps[-1][1] == len(data)-1:
+			data = data[:gaps[-1][0]]
+			timevec = timevec[:gaps[-1][0]] # need to ensure timevec corresponds
+
+
+		if gaps[0][0] == 0:
+			data = data[gaps[0][1]+1:]
+			timevec = timevec[gaps[0][1]+1:]
+		
+		gaps = get_gaps_positions(data) # find new indicies of gaps as we may have changed length
+
+	x = np.array(range(0, len(data)))[~pd.isnull(data)]
+	y = data[~pd.isnull(data)]
+
+	f = interpolate.interp1d(x, y, bounds_error=False, fill_value = np.NaN)
+	interpolated = np.array([x if not pd.isnull(x) else f(i) for i, x in enumerate(data)])	
+
+	return interpolated, timevec, gaps
+
+
+""" PIPELINE FUNCTIONS """
 
 def run_speedyf(root, out):
 
@@ -286,7 +356,7 @@ def calculate_hrv_metrics(root, out, forced=False):
 
 
 		for segment in segmenter:
-			print(f"{segment.idx}/{segmenter.get_max_segment_count()}")
+			print(f"{segment.idx}/{segmenter.get_max_segment_count()-1}")
 
 			ecg = segment.data[ecg_channel].to_numpy()
 			if len(ecg) != 0:
@@ -316,107 +386,54 @@ def calculate_hrv_metrics(root, out, forced=False):
 		time_dom_df, freq_dom_df, modification_report_df = produce_hrv_dataframes(time_dom_hrvs, freq_dom_hrvs, modification_reports, segment_labels)	
 		save_hrv_dataframes(time_dom_df, freq_dom_df, modification_report_df, out)	
 
-def get_gaps_positions(data):
-	# get idx of runs of NaNs in data
-	# (start_idx, end_idx) inclusive; so start:end+1 is the run. data[end] is NaN, data[end+1] shouldn't be.
-	gaps = []
-	on_NaN = False
-	p = 0
-	while p < len(data):
-	    if np.isnan(data[p]) and not on_NaN:
-		    NaN_start = p
-		    on_NaN = True
-	    elif on_NaN and not np.isnan(data[p]):
-		    NaN_end = p-1
-		    gaps.append((NaN_start, NaN_end))
-		    on_NaN = False
 
-	    if p == len(data)-1:
-		    if on_NaN:
-			    NaN_end = p
-			    gaps.append((NaN_start, NaN_end))
-
-	    p += 1
-
-	return gaps
-
-
-def cut_gaps(data, gaps):
-	
-	copy = data.copy()
-	
-	for gap in gaps:
-		copy[gap[0]:gap[1]+1] = np.NaN
-
-	return copy
-
-def interpolate_gaps(data):
-
-	gaps = get_gaps_positions(data)
-	# remove gaps that start at start/end at end (will not be interpolated, and will mess up decomposition)
-	if len(gaps) > 0:
-		if gaps[-1][1] == len(data)-1:
-			data = data[:gaps[-1][0]]
-
-		if gaps[0][0] == 0:
-			data = data[gaps[0][1]+1:]
-		
-		gaps = get_gaps_positions(data) # find new indicies of gaps as we may have changed length
-
-	x = np.array(range(0, len(data)))[~pd.isnull(data)]
-	y = data[~pd.isnull(data)]
-
-	f = interpolate.interp1d(x, y, bounds_error=False, fill_value = np.NaN)
-	interpolated = np.array([x if not pd.isnull(x) else f(i) for i, x in enumerate(data)])	
-
-	return interpolated, gaps
-
-def mra(data, gaps, sharey=False):
+def mra(timevec, data, gaps, sharey=False):
 		
 	# perform EMD
 	title = f"MeanIHR_EMD"
 	imfs = emd.sift.sift(data).T
-	emd_peaks = components_plot(imfs, data, out, title, gaps, sharey=sharey)
+	emd_peaks = components_plot(timevec, imfs, data, out, title, gaps, sharey=sharey)
 	
 	# perform EEMD
 	title = f"MeanIHR_EEMD"
 	imfs = emd.sift.ensemble_sift(data, nensembles=4, nprocesses=3, ensemble_noise=1).T
 	imfs = imfs[1:]
-	eemd_peaks = components_plot(imfs, data, out, title, gaps, sharey=sharey)
+	eemd_peaks = components_plot(timevec, imfs, data, out, title, gaps, sharey=sharey)
 	
 	# perform VMD
 	title = f"MeanIHR_VMD"
 	alpha = 2000  # moderate bandwidth constraint  
 	tau = 0.      # noise-tolerance (no strict fidelity enforcement)  
-	K = 6         # n of modes to be recovered  
+	K = 2         # n of modes to be recovered  
 	DC = 0        # no DC part imposed  
 	init = 1      # initialize omegas uniformly 
 	tol = 1e-7
 	u, u_hat, omega = vmdpy.VMD(data, alpha, tau, K, DC, init, tol)
 	u = np.flipud(u)
-	vmd_peaks = components_plot(u, data, out, title, gaps, sharey=sharey)
+	vmd_peaks = components_plot(timevec, u, data, out, title, gaps, sharey=sharey)
 
 	# perform WT MRA
 	title = f"MeanIHR_WT"
 	#wavelet = pywt.Wavelet("sym4") # sym4 is default wavelet used by MATLAB modwt()
 	wavelet = pywt.Wavelet("db4") 
-	data_wt = data if len(data) % 2 == 0 else data[:-1]
+	data_wt = data if len(data) % 2 == 0 else data[:-1]  # must be odd length
+	timevec_wt = timevec if len(timevec) % 2 == 0 else timevec[:-1]
 	output = pywt.mra(data_wt, wavelet, transform="dwt")
 	output = np.flip(output, axis=0)
-	wt_peaks = components_plot(output, data_wt, out, title, gaps, sharey=sharey)	
+	wt_peaks = components_plot(timevec_wt, output, data_wt, out, title, gaps, sharey=sharey)	
 
 	# filter out the peaks identified	
 	peaks = eemd_peaks # which decomposition method's peaks will we use?
 	
-	fig, axs = plt.subplots(len(peaks)+2, 1, sharex=True,) 
+	fig, axs = plt.subplots(len(peaks)+2, 1, sharex=True, figsize=(19.20, 19.20)) 
 	plt.subplots_adjust(bottom=0.04, top=0.921, hspace=0.402)
 
 	data = reflect(data)
 	
 	fontsize = "smaller"
 
-	axs[0].plot(remove_reflect(data), alpha=0.5, color="black")
-	axs[0].plot(cut_gaps(remove_reflect(data), gaps), color="black")
+	axs[0].plot(timevec, remove_reflect(data), alpha=0.5, color="black")
+	axs[0].plot(timevec, cut_gaps(remove_reflect(data), gaps), color="black")
 	axs[0].set_title("Original Data", loc="left", fontsize=fontsize)
 
 	filtered_data = []
@@ -444,26 +461,29 @@ def mra(data, gaps, sharey=False):
 				bandpass_filtered = butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order)
 				
 				color = "dodgerblue"
-				axs[i+1].plot(remove_reflect(bandpass_filtered), alpha=0.5, color=color)
-				axs[i+1].plot(cut_gaps(remove_reflect(bandpass_filtered), gaps), color=color)
+				axs[i+1].plot(timevec, remove_reflect(bandpass_filtered), alpha=0.5, color=color)
+				axs[i+1].plot(timevec, cut_gaps(remove_reflect(bandpass_filtered), gaps), color=color)
 				axs[i+1].set_title(f"Peak @ {peak[0]}h (Filtered {np.round(highcut_period[0], decimals=2)}h - {np.round((peak+1)[0], decimals=2)}h)", loc="left", fontsize=fontsize)
 				
 				filtered_data.append(bandpass_filtered)
 			else: print(f"Highcut Frequency {highcut} exceeds Nyquist {fs/2}, so skipping this Peak")
 		else: print(f"Peak Frequency {1/(peak*60*60)} exceeds Nyquist {fs/2}, so skipping this Peak")
 
+	if len(peaks) > 0:
+		filtered_data = np.sum(np.array(filtered_data), axis=0,)
+		axs[-1].plot(timevec, remove_reflect(filtered_data), alpha=0.5, color="black")
+		axs[-1].plot(timevec, cut_gaps(remove_reflect(filtered_data), gaps), color="black")
+		axs[-1].set_title("Filtered Signal Summation", loc="left", fontsize=fontsize)
 
-	filtered_data = np.sum(np.array(filtered_data), axis=0,)
-	axs[-1].plot(remove_reflect(filtered_data), alpha=0.5, color="black")
-	axs[-1].plot(cut_gaps(remove_reflect(filtered_data), gaps), color="black")
-	axs[-1].set_title("Filtered Signal Summation", loc="left", fontsize=fontsize)
+	
+	for ax in axs:
+		ax.xaxis.set_major_formatter(DateFormatter("%d/%m %H:%M:%S"))
+	fig.supxlabel("Time (d/m h:m:s)")
 
+	fig.savefig(os.path.join(out, "Filtered_Peaks"))
 
-	fig.show()
+def wavelet_transform(timevec, data, gaps):
 
-def wavelet_transform(data, gaps):
-
-	timevec_h = (np.arange(0, len(data))*5)/24
 
 	fs = 1/300 # TODO this needs to be param
 	w = 6.0 # default Omega0 param for morlet2 (5.0). Seems to control frequency of complex sine part?
@@ -499,7 +519,10 @@ def wavelet_transform(data, gaps):
 	interpolation = "antialiased"#"none"
 	#axs[2].imshow(cwtmatr_yflip, vmax = abs(cwtmatr).max(), vmin = -abs(cwtmatr).max(), aspect="auto", interpolation=interpolation)
 	#axs[2].imshow(cwtmatr_yflip, vmax = abs(cwtmatr).max(), vmin = 0, aspect="auto", interpolation=interpolation)
-	pos = axs[2].imshow(cwtmatr_yflip, aspect="auto", interpolation=interpolation, cmap='Greens_r')
+	#pos = axs[2].imshow(cwtmatr_yflip, aspect="auto", interpolation=interpolation, cmap='Greens_r')
+	
+	pos = axs[2].pcolormesh(timevec, np.round(periods/60/60, decimals=0), cwtmatr_yflip)	
+
 	#cbar = fig.colorbar(pos, ax=axs[2])
 	"""	
 	yticks = ax.get_yticks()
@@ -507,7 +530,7 @@ def wavelet_transform(data, gaps):
 	yticks[yticks > 0] -= 1
 	axs[1].set_yticks(ticks = yticks, labels=periods[np.int32(yticks)])
 	"""
-	axs[2].set_yticks(ticks=range(0, len(cwtmatr)), labels=np.floor(periods/60/60))
+	#axs[2].set_yticks(ticks=range(0, len(cwtmatr)), labels=np.floor(periods/60/60))
 	axs[2].set_ylabel("Period (h)")
 	axs[2].set_title("Wavelet Transform Time-Frequency", loc="right")
 
@@ -515,26 +538,27 @@ def wavelet_transform(data, gaps):
 	highcut=1/(21*60*60) 
 	fs=fs 
 	order=4
-	circadian_bandpass = butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order)
-	axs[1].plot(remove_reflect(circadian_bandpass), c="r", alpha=0.5)
-	axs[1].plot(cut_gaps(remove_reflect(circadian_bandpass), gaps), c="r", label="Circadian Band (21h-33h)")
-	axs[1].set_title("Bandpass-filtered Circadian Rhythm (21h-33h)", loc="right")
+	
+	try:
+		circadian_bandpass = butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order)
+		axs[1].plot(timevec, remove_reflect(circadian_bandpass), c="r", alpha=0.5)
+		axs[1].plot(timevec, cut_gaps(remove_reflect(circadian_bandpass), gaps), c="r", label="Circadian Band (21h-33h)")
+		axs[1].set_title("Bandpass-filtered Circadian Rhythm (21h-33h)", loc="right")
+	except ValueError as ve:
+		print(ve)
+		pass
 
-	"""
-	original_xticks = axs[0].get_xticks() #sharex=True, so both axs have same xticks
-	original_xticks = original_xticks[original_xticks >= 0]
-	original_xticks = np.int32(original_xticks)
-	original_xticks = [tick for tick in original_xticks if tick < len(data)]
-	axs[0].set_xticks(ticks=original_xticks, labels=timevec_h[original_xticks])
-	axs[1].set_xticks(ticks=original_xticks, labels=timevec_h[original_xticks])
-	"""
 
 	data = remove_reflect(data)
-	axs[0].plot(range(0, len(data)), data, color="black", alpha=0.5)
-	axs[0].plot(range(0, len(data)), cut_gaps(data, gaps), color="black")
+	axs[0].plot(timevec, data, color="black", alpha=0.5)
+	axs[0].plot(timevec, cut_gaps(data, gaps), color="black")
 	axs[0].set_title("Original Data", loc="right")
 	
 
+	for ax in axs:
+		ax.xaxis.set_major_formatter(DateFormatter("%d/%m %H:%M:%S"))
+	fig.supxlabel("Time (d/m h:m:s)")
+	
 	fig.show()	
 
 def simulate_data():
@@ -557,7 +581,7 @@ def simulate_data():
 	#circadian2 = rhythym(19, 10, 0); data += circadian2
 	#multidien = rhythym(50, 10, 0);  data += multidien
 	#ultradian1 = rhythym(5, 10, 0);  data += ultradian1
-	ultradian2 = rhythym(1, 10, 0);  data += ultradian2
+	ultradian2 = rhythym(3, 100, 0);  data += ultradian2
 	
 	shift = 85 #add this to sinewave, to shift it from being mean-centered, so it resembles a mean IHR
 	data += shift
@@ -568,7 +592,7 @@ def simulate_data():
 
 
 if __name__ == "__main__":
-	subject = "1220"
+	subject = "sim"
 	root = constants.SUBJECT_DATA_ROOT.format(subject=subject)
 	out = constants.SUBJECT_DATA_OUT.format(subject=subject)
 
@@ -587,16 +611,18 @@ if __name__ == "__main__":
 		#data = freq_dom_df["fft_ratio"]
 		data = np.array(data)
 	
+		timevec = edf_segment.EDFSegmenter(root, out, segment_len_s=300).get_segment_onsets(as_datetime=True)
+	
 	else:
 		data = simulate_data()
-
+		timevec = [datetime.datetime.fromtimestamp(0) + datetime.timedelta(seconds=(i * 300)) for i in range(0, len(data))]
 
 
 	# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
-	interpolated, gaps = interpolate_gaps(data) 
+	interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
 
 	# perform multi-resolution analysis (signal decomposition)	
-	mra(interpolated, gaps, sharey=False)
+	#mra(timevec, interpolated, gaps, sharey=False)
 
 	# perform time-frequency analysis using wavelet_transform
-	wavelet_transform(interpolated, gaps)	
+	wavelet_transform(timevec, interpolated, gaps)	
