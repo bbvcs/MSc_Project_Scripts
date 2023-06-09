@@ -328,7 +328,8 @@ def calculate_hrv_metrics(root, out, rng, forced=False):
 
 	segmenter = edf_segment.EDFSegmenter(root, out, segment_len_s=300, cache_lifetime=1)	
 
-	ecg_channels = [ch for ch in segmenter.get_available_channels() if "ecg" in ch.lower()]
+	print("TODO REMOVE ECG2")
+	ecg_channels = [ch for ch in segmenter.get_available_channels() if ("ecg2" in ch.lower()) or ("ekg" in ch.lower())]
 	if len(ecg_channels) == 0: raise KeyError("No channels with names containing 'ECG' could be found!")
 	segmenter.set_used_channels(ecg_channels)
 
@@ -399,7 +400,7 @@ def calculate_hrv_metrics(root, out, rng, forced=False):
 		save_hrv_dataframes(time_dom_df, freq_dom_df, modification_report_df, out)	
 
 
-def mra(timevec, data, gaps, onsets, durations, sharey=False):
+def mra(out, timevec, data, gaps, onsets, durations, sharey=False):
 		
 	# perform EMD
 	title = f"MeanIHR_EMD"
@@ -502,7 +503,7 @@ def wavelet_transform(timevec, data, gaps, onsets, durations):
 
 
 	fs = 1/300 # TODO this needs to be param
-	w = 6.0 # default Omega0 param for morlet2 (5.0). Seems to control frequency of complex sine part?
+	w = 10.0 # default Omega0 param for morlet2 (5.0). Seems to control frequency of complex sine part?
 
 	data = data - np.mean(data) # remove DC offset, otherwise a lot of power at very low frequencies	
 	data = reflect(data)
@@ -612,33 +613,72 @@ def simulate_data():
 	return data	
 
 
+def get_ecg_channel_subdirs(out):
+	# subjects with more than one ECG channel will have pipeline run for each 
+
+	out_contents = os.listdir(out) # get the files and dirs in the top level of out directory
+
+	# firstly, are there no HRV results in top-level (for multi-ECG-channel-subjects, will be in channel subdir)?
+	if ((not "MODIFICATION_REPORT.csv" in out_contents) 
+			and (not "TIMEDOM.csv" in out_contents) 
+			and (not "FREQDOM.csv" in out_contents)):
+			
+		# next, are there subdirectories which look like they represent ECG channels?
+		ecg_dirs = [f for f in out_contents if (("ecg" in f.lower()) or (("ekg" in f.lower())) and os.is_dir(os.path.join(out, f)))]
+		
+		if len(ecg_dirs) > 0:
+			return ecg_dirs
+
+	return []	
+		
+
+
 if __name__ == "__main__":
-	subject = "865"
+	subject = "1379_first"
 	root = constants.SUBJECT_DATA_ROOT.format(subject=subject)
-	out = constants.SUBJECT_DATA_OUT.format(subject=subject)
+	subject_out = constants.SUBJECT_DATA_OUT.format(subject=subject)
 
 	rng = np.random.default_rng(1905)
 
+
 	if not subject=="sim":
 		# collate data and resolve overlaps
-		run_speedyf(root, out); 
+		run_speedyf(root, subject_out); 
 		
 		# produce hrv metric dataframes, and save to out/
-		calculate_hrv_metrics(root, out, rng)# will not re-calculate if dataframes already present in out
+		calculate_hrv_metrics(root, subject_out, rng)# will not re-calculate if dataframes already present in out
 
-		# load the hrv metric dataframes we just produced
-		time_dom_df, freq_dom_df, modification_report_df = load_hrv_dataframes(out)
-
-		# what metric are we interested in?
-		data = time_dom_df["hr_mean"]
-		#data = freq_dom_df["fft_ratio"]
-		data = np.array(data)
+		# does the subject have multiple ECG channels?
+		ecg_subdirs = get_ecg_channel_subdirs(subject_out)
+		if len(ecg_subdirs) > 0:
+			outs = [os.path.join(subject_out, subdir) for subdir in ecg_subdirs]
+		else:
+			outs = [subject_out]
 	
-		# get timestamps corresponding to segments
-		timevec = edf_segment.EDFSegmenter(root, out, segment_len_s=300).get_segment_onsets(as_datetime=True)
+		for out in outs:
+
+			# load the hrv metric dataframes we just produced
+			time_dom_df, freq_dom_df, modification_report_df = load_hrv_dataframes(out)
+
+			# what metric are we interested in?
+			data = time_dom_df["hr_mean"]
+			#data = freq_dom_df["fft_ratio"]
+			data = np.array(data)
 		
-		# get timestamps corresponding to seizures and their durations
-		onsets, durations = get_seizures(subject)
+			# get timestamps corresponding to segments
+			timevec = edf_segment.EDFSegmenter(root, subject_out, segment_len_s=300).get_segment_onsets(as_datetime=True)
+			
+			# get timestamps corresponding to seizures and their durations
+			onsets, durations = get_seizures(subject)
+			
+			# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
+			interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
+
+			# perform multi-resolution analysis (signal decomposition)	
+			mra(out, timevec, interpolated, gaps, onsets, durations, sharey=False)
+
+			# perform time-frequency analysis using wavelet_transform
+			wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
 	
 	else:
 		data = simulate_data()
@@ -646,14 +686,9 @@ if __name__ == "__main__":
 		timevec = [datetime.datetime.fromtimestamp(0) + datetime.timedelta(seconds=(i * 300)) for i in range(0, len(data))]
 
 		onsets = durations = []
-
 	
+		interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
 
-	# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
-	interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
+		mra(subject_out, timevec, interpolated, gaps, onsets, durations, sharey=False)
 
-	# perform multi-resolution analysis (signal decomposition)	
-	mra(timevec, interpolated, gaps, onsets, durations, sharey=False)
-
-	# perform time-frequency analysis using wavelet_transform
-	wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
+		wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
