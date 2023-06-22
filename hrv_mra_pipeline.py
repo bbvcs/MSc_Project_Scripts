@@ -775,7 +775,7 @@ if __name__ == "__main__":
 				wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
 			
 			with open(logfile_loc, "a") as logfile:
-				logfile.write(f"\n{i+1}/{len(subjects)}:\t{subject}:\tSuccess")
+				logfile.write(f"\n{i+1}/{len(subjects)}:\t{subject}:\tSuccess!\tRuntime:{time.time()-start}")
 
 		except Exception as e:
 			with open(logfile_loc, "a") as logfile:
