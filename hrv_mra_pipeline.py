@@ -12,6 +12,7 @@ import pandas as pd
 import os
 import sys
 import json
+import time
 import datetime
 import math
 
@@ -646,14 +647,17 @@ def simulate_data():
 	shift = 85 #add this to sinewave, to shift it from being mean-centered, so it resembles a mean IHR
 	
 	data = np.zeros(len(timevec))
-	circadian1 = rhythym(24, A=12, phi=0); data += circadian1 # TODO sawtooth
+	#circadian1 = rhythym(24, A=12, phi=0); data += circadian1 
+	circadian1 = signal.sawtooth(2*np.pi*(1/(24))*timevec/60/60); data += circadian1
 	#circadian2 = rhythym(19, A=10, phi=0); data += circadian2
-	multidien = rhythym(50, A=2, phi=0);  data += multidien
+	
+	##multidien = rhythym(50, A=2, phi=0);  data += multidien
+	
 	#ultradian1 = rhythym(12, A=5, phi=1);  data += ultradian1
-	ultradian2 = rhythym(3, A=3, phi=0) * np.hanning(len(timevec));  data += ultradian2
+	##ultradian2 = rhythym(3, A=3, phi=0) * np.hanning(len(timevec));  data += ultradian2
 	#ultradian3 = rhythym_chirp(12, np.median(timevec), 10, A=5, method="linear"); data+= ultradian3
 
-	noise = 3* np.random.normal(0, 1, len(timevec)); data += noise 
+	#noise = 3* np.random.normal(0, 1, len(timevec)); data += noise 
 	
 	data += shift
 
@@ -684,65 +688,104 @@ def get_ecg_channel_subdirs(out):
 
 
 if __name__ == "__main__":
-	subject = "1379_ECGEKG"
-	root = constants.SUBJECT_DATA_ROOT.format(subject=subject)
-	subject_out = constants.SUBJECT_DATA_OUT.format(subject=subject)
+	#subject = "909_test"
+	subjects = ["sim", "none", "909_test"]
 
-	rng = np.random.default_rng(1905)
+	start = time.time()
+	
+	now = datetime.datetime.now()
 
+	logfile_dir = constants.SUBJECT_DATA_OUT.format(subject='LOGS')	
+	os.makedirs(logfile_dir, exist_ok=True)
+	logfile_loc = f"{logfile_dir}/logfile_{now.day}_{now.month}_{now.year}.txt"	
 
-	if not subject=="sim":
-		# collate data and resolve overlaps
-		run_speedyf(root, subject_out); 
+	with open(logfile_loc, "w") as logfile:
+		logfile.write(str(now))
+		logfile.write("\n")
+		logfile.write(f"{len(subjects)}\tsubjects:\t{subjects}")
+		logfile.write("\n")
 		
-		# produce hrv metric dataframes, and save to out/
-		calculate_hrv_metrics(root, subject_out, rng)# will not re-calculate if dataframes already present in out
+	i = 0
+	for subject in subjects:
 
-		# does the subject have multiple ECG channels?
-		ecg_subdirs = get_ecg_channel_subdirs(subject_out)
-		if len(ecg_subdirs) > 0:
-			outs = [os.path.join(subject_out, subdir) for subdir in ecg_subdirs]
-		else:
-			outs = [subject_out]
+		print(f"\n$RUNNING FOR SUBJECT: {subject}\n")
 	
-		for out in outs:
+		try:
 
-			# load the hrv metric dataframes we just produced
-			time_dom_df, freq_dom_df, modification_report_df = load_hrv_dataframes(out)
+			root = constants.SUBJECT_DATA_ROOT.format(subject=subject)
+			subject_out = constants.SUBJECT_DATA_OUT.format(subject=subject)
 
-			# what metric are we interested in?
-			data = time_dom_df["hr_mean"]
-			#data = freq_dom_df["fft_ratio"]
-			data = np.array(data)
-		
-			# get timestamps corresponding to segments
-			timevec = edf_segment.EDFSegmenter(root, subject_out, segment_len_s=300).get_segment_onsets(as_datetime=True)
+			rng = np.random.default_rng(1905)
+
+
+			if not subject=="sim":
+				# collate data and resolve overlaps
+				run_speedyf(root, subject_out); 
+				
+				# produce hrv metric dataframes, and save to out/
+				calculate_hrv_metrics(root, subject_out, rng)# will not re-calculate if dataframes already present in out
+
+				# does the subject have multiple ECG channels?
+				ecg_subdirs = get_ecg_channel_subdirs(subject_out)
+				if len(ecg_subdirs) > 0:
+					outs = [os.path.join(subject_out, subdir) for subdir in ecg_subdirs]
+				else:
+					outs = [subject_out]
 			
-			# get timestamps corresponding to seizures and their durations
-			onsets, durations = get_seizures(subject)
+				for out in outs:
+
+					# load the hrv metric dataframes we just produced
+					time_dom_df, freq_dom_df, modification_report_df = load_hrv_dataframes(out)
+
+					# what metric are we interested in?
+					data = time_dom_df["hr_mean"]
+					#data = freq_dom_df["fft_ratio"]
+					data = np.array(data)
+				
+					# get timestamps corresponding to segments
+					timevec = edf_segment.EDFSegmenter(root, subject_out, segment_len_s=300).get_segment_onsets(as_datetime=True)
+					
+					# get timestamps corresponding to seizures and their durations
+					onsets, durations = get_seizures(subject)
+					
+					# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
+					interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
+
+					# perform multi-resolution analysis (signal decomposition)	
+					mra(out, timevec, interpolated, gaps, onsets, durations, sharey=False)
+
+					# perform time-frequency analysis using wavelet_transform
+					wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
 			
-			# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
-			interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
+			else:
+				data = simulate_data()
 
-			# perform multi-resolution analysis (signal decomposition)	
-			mra(out, timevec, interpolated, gaps, onsets, durations, sharey=False)
+				# simulate missing data
+				data[math.floor(np.quantile(range(0, len(data)), 0.7)): math.ceil(np.quantile(range(0, len(data)), 0.8))] = np.NaN # large gap
+				data[np.random.choice(len(data), math.floor(len(data) * 0.1))] = np.NaN
 
-			# perform time-frequency analysis using wavelet_transform
-			wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
-	
-	else:
-		data = simulate_data()
+				timevec = [datetime.datetime.fromtimestamp(0) + datetime.timedelta(seconds=(i * 300)) for i in range(0, len(data))]
 
-		# simulate missing data
-		data[math.floor(np.quantile(range(0, len(data)), 0.7)): math.ceil(np.quantile(range(0, len(data)), 0.8))] = np.NaN # large gap
-		data[np.random.choice(len(data), math.floor(len(data) * 0.1))] = np.NaN
+				onsets = durations = []
+			
+				interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
 
-		timevec = [datetime.datetime.fromtimestamp(0) + datetime.timedelta(seconds=(i * 300)) for i in range(0, len(data))]
+				mra(subject_out, timevec, interpolated, gaps, onsets, durations, sharey=False)
 
-		onsets = durations = []
-	
-		interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
+				wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
+			
+			with open(logfile_loc, "a") as logfile:
+				logfile.write(f"\n{i+1}/{len(subjects)}:\t{subject}:\tSuccess")
 
-		mra(subject_out, timevec, interpolated, gaps, onsets, durations, sharey=False)
+		except Exception as e:
+			with open(logfile_loc, "a") as logfile:
+				logfile.write(f"\n{i+1}/{len(subjects)}:\t{subject}:\t{e}")
 
-		wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
+
+		i += 1
+
+
+	end = time.time()
+
+	with open(logfile_loc, "a") as logfile:
+		logfile.write(f"\nComplete@{str(datetime.datetime.now())}!\tRuntime:{end-start}")
