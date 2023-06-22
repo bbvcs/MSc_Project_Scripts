@@ -12,7 +12,9 @@ import pandas as pd
 import os
 import sys
 import json
+import time
 import datetime
+import math
 
 import constants
 
@@ -24,6 +26,7 @@ from hrv_preprocessor.hrv_preprocessor import hrv_per_segment, produce_hrv_dataf
 
 # TODO REMEMBER TO CITE PACKAGES
 import emd  # EMD, EEMD
+#from PyEMD import EMD
 import pywt # Wavelet Transform?
 import vmdpy # Variational Mode Decomposition
 
@@ -328,12 +331,23 @@ def calculate_hrv_metrics(root, out, rng, forced=False):
 
 	segmenter = edf_segment.EDFSegmenter(root, out, segment_len_s=300, cache_lifetime=1)	
 
-	print("TODO REMOVE ECG2")
-	ecg_channels = [ch for ch in segmenter.get_available_channels() if ("ecg2" in ch.lower()) or ("ekg" in ch.lower())]
-	if len(ecg_channels) == 0: raise KeyError("No channels with names containing 'ECG' could be found!")
+	ecg_channels = [ch for ch in segmenter.get_available_channels() if ("ecg" in ch.lower()) or ("ekg" in ch.lower())]
+	if len(ecg_channels) == 0: 
+		raise KeyError("No channels with names containing 'ECG' could be found!")
 	segmenter.set_used_channels(ecg_channels)
 
 
+	try:
+		load_hrv_dataframes(out)			
+
+		if not forced:
+			print("HRV Metrics Dataframes appear to exist, and parameter forced=False, so HRV Metrics will not be re-calculated.") 
+			return
+
+	except FileNotFoundError:
+		pass
+
+	"""
 	for ecg_channel in ecg_channels:
 
 		try:
@@ -358,53 +372,65 @@ def calculate_hrv_metrics(root, out, rng, forced=False):
 			if not os.path.exists(out):
 				print(f"Setting up directory for {ecg_channel} HRV output (subject has multiple ECG channels): at '{out}'")
 				os.makedirs(out, exist_ok=True)
-
-		freq_dom_hrvs = []
-		time_dom_hrvs = []
-		modification_reports = []
-
-		# TODO keys defined again in produce hrv_dataframes
-		time_dom_keys = np.array(['nni_counter', 'nni_mean', 'nni_min', 'nni_max', 'hr_mean', 'hr_min', 'hr_max', 'hr_std', 'nni_diff_mean', 'nni_diff_min', 'nni_diff_max', 'sdnn', 'sdnn_index', 'sdann', 'rmssd', 'sdsd', 'nn50', 'pnn50', 'nn20', 'pnn20', 'nni_histogram', 'tinn_n', 'tinn_m', 'tinn', 'tri_index'])
-		freq_dom_keys = np.array(['fft_bands', 'fft_peak', 'fft_abs', 'fft_rel', 'fft_log', 'fft_norm', 'fft_ratio', 'fft_total', 'fft_plot', 'fft_nfft', 'fft_window', 'fft_resampling_frequency', 'fft_interpolation'])
+	"""
 
 
-		for segment in segmenter:
-			print(f"{segment.idx}/{segmenter.get_max_segment_count()-1}")
 
-			ecg = segment.data[ecg_channel].to_numpy()
-			if len(ecg) != 0:
-				ecg = butter_lowpass_filter(ecg, 22, 512, 4)
 
-			#eps = 0.125
-			eps = 0.14
+	freq_dom_hrvs = []
+	time_dom_hrvs = []
+	modification_reports = []
 
-			rpeaks, rri, rri_corrected, freq_dom_hrv, time_dom_hrv, modification_report = hrv_per_segment(ecg, segment.sample_rate, 5, segment_idx=segment.idx, save_plots_dir=os.path.join(out, "saved_plots"), save_plots=True, save_plot_filename=segment.idx, use_segmenter="engzee", DBSCAN_RRI_EPSILON_MEAN_MULTIPLIER=eps, DBSCAN_MIN_SAMPLES=70, rng=rng)
-			#print(modification_report["notes"])
-			
-			if not isinstance(freq_dom_hrv, float):
-				freq_dom_hrvs.append(np.array(freq_dom_hrv, dtype="object"))
+	# TODO keys defined again in produce hrv_dataframes
+	time_dom_keys = np.array(['nni_counter', 'nni_mean', 'nni_min', 'nni_max', 'hr_mean', 'hr_min', 'hr_max', 'hr_std', 'nni_diff_mean', 'nni_diff_min', 'nni_diff_max', 'sdnn', 'sdnn_index', 'sdann', 'rmssd', 'sdsd', 'nn50', 'pnn50', 'nn20', 'pnn20', 'nni_histogram', 'tinn_n', 'tinn_m', 'tinn', 'tri_index'])
+	freq_dom_keys = np.array(['fft_bands', 'fft_peak', 'fft_abs', 'fft_rel', 'fft_log', 'fft_norm', 'fft_ratio', 'fft_total', 'fft_plot', 'fft_nfft', 'fft_window', 'fft_resampling_frequency', 'fft_interpolation'])
+
+	print("Gathering Segments...")
+	for segment in segmenter:
+		print(f"{segment.idx}/{segmenter.get_max_segment_count()-1}")
+
+		#ecg = segment.data[ecg_channel].to_numpy()
+		ecg = segment.data.to_numpy()
+		if len(ecg) != 0:
+			if len(ecg.shape) > 1:
+				ecg = ecg.T
+				for ch in range(0, ecg.shape[0]):
+					ecg[ch] = butter_lowpass_filter(ecg[ch], 22, segment.sample_rate, 4)
 			else:
-				freq_dom_hrvs.append(np.full(shape=freq_dom_keys.shape, fill_value=np.NaN))
+				ecg = butter_lowpass_filter(ecg, 22, segment.sample_rate, 4)
 
-			if not isinstance(time_dom_hrv, float):
-				time_dom_hrvs.append(np.array(time_dom_hrv))
-			else:
-				time_dom_hrvs.append(np.full(shape=time_dom_keys.shape, fill_value=np.NaN))
+		#eps = 0.125
+		eps = 0.14
+		min_samp = 35
 
-			modification_reports.append(modification_report)
-
-
-		segment_labels = np.array(range(0, segmenter.get_max_segment_count()))
+		rpeaks, rri, rri_corrected, freq_dom_hrv, time_dom_hrv, modification_report = hrv_per_segment(ecg, segment.sample_rate, 5, segment_idx=segment.idx, save_plots_dir=os.path.join(out, "saved_plots"), save_plots=True, save_plot_filename=segment.idx, use_segmenter="engzee", DBSCAN_RRI_EPSILON_MEAN_MULTIPLIER=eps, DBSCAN_MIN_SAMPLES=min_samp, rng=rng)
+		#print(modification_report["notes"])
 		
-		time_dom_df, freq_dom_df, modification_report_df = produce_hrv_dataframes(time_dom_hrvs, freq_dom_hrvs, modification_reports, segment_labels)	
-		save_hrv_dataframes(time_dom_df, freq_dom_df, modification_report_df, out)	
+		if not isinstance(freq_dom_hrv, float):
+			freq_dom_hrvs.append(np.array(freq_dom_hrv, dtype="object"))
+		else:
+			freq_dom_hrvs.append(np.full(shape=freq_dom_keys.shape, fill_value=np.NaN))
+
+		if not isinstance(time_dom_hrv, float):
+			time_dom_hrvs.append(np.array(time_dom_hrv))
+		else:
+			time_dom_hrvs.append(np.full(shape=time_dom_keys.shape, fill_value=np.NaN))
+
+		modification_reports.append(modification_report)
+
+
+	segment_labels = np.array(range(0, segmenter.get_max_segment_count()))
+	
+	time_dom_df, freq_dom_df, modification_report_df = produce_hrv_dataframes(time_dom_hrvs, freq_dom_hrvs, modification_reports, segment_labels)	
+	save_hrv_dataframes(time_dom_df, freq_dom_df, modification_report_df, out)	
 
 
 def mra(out, timevec, data, gaps, onsets, durations, sharey=False):
 		
 	# perform EMD
 	title = f"MeanIHR_EMD"
-	imfs = emd.sift.sift(data).T
+	imfs = emd.sift.sift(data, sift_thresh=1).T
+	#emd2 = EMD(); imfs = emd2(data)
 	emd_peaks = components_plot(timevec, imfs, data, out, title, gaps, onsets, durations, sharey=sharey)
 	
 	# perform EEMD
@@ -469,7 +495,7 @@ def mra(out, timevec, data, gaps, onsets, durations, sharey=False):
 			if highcut < fs/2:
 
 
-				test_butter_bandpass(lowcut, highcut, fs, order)
+				#test_butter_bandpass(lowcut, highcut, fs, order)
 
 				bandpass_filtered = butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order)
 				
@@ -503,7 +529,13 @@ def wavelet_transform(timevec, data, gaps, onsets, durations):
 
 
 	fs = 1/300 # TODO this needs to be param
-	w = 10.0 # default Omega0 param for morlet2 (5.0). Seems to control frequency of complex sine part?
+	w = 5 # default Omega0 param for morlet2 (5.0). Seems to control frequency of complex sine part?
+
+	fig, axs = plt.subplots(3,1,sharex=True, height_ratios=[2, 1, 7])
+	
+	axs[0].plot(timevec, data, color="black", alpha=0.5)
+	axs[0].plot(timevec, cut_gaps(data, gaps), color="black")
+	axs[0].set_title("Original Data", loc="right")
 
 	data = data - np.mean(data) # remove DC offset, otherwise a lot of power at very low frequencies	
 	data = reflect(data)
@@ -526,13 +558,15 @@ def wavelet_transform(timevec, data, gaps, onsets, durations):
 	cwtmatr = signal.cwt(data, signal.morlet2, widths, w=w, dtype=np.complex128)
 	cwtmatr_yflip = cwtmatr	
 	#cwtmatr_yflip = np.flipud(cwtmatr) # TODO can keep this, just need to flip y axis labels
-	cwtmatr_yflip = np.abs(cwtmatr_yflip) # this isn't in tutorial (as tehy are using ricker wavelet, not complex morlet, i presume), imshow won't work without
 	
+	# one or the other, as cwtmatr is complex
+	#cwtmatr_yflip = np.abs(cwtmatr_yflip) # get magnitude
+	cwtmatr_yflip = cwtmatr_yflip.real 
+	#cwtmatr_yflip = np.angle(cwtmatr_yflip)
+
+	# remove padding	
 	cwtmatr_yflip = np.apply_along_axis(remove_reflect, 1, cwtmatr_yflip)
 
-	#cwtmatr_yflip = np.power(cwtmatr_yflip, 2)
-
-	fig, axs = plt.subplots(3,1,sharex=True, height_ratios=[2, 1, 7])
 	interpolation = "antialiased"#"none"
 	#axs[2].imshow(cwtmatr_yflip, vmax = abs(cwtmatr).max(), vmin = -abs(cwtmatr).max(), aspect="auto", interpolation=interpolation)
 	#axs[2].imshow(cwtmatr_yflip, vmax = abs(cwtmatr).max(), vmin = 0, aspect="auto", interpolation=interpolation)
@@ -540,7 +574,7 @@ def wavelet_transform(timevec, data, gaps, onsets, durations):
 	
 	pos = axs[2].pcolormesh(timevec, np.round(periods/60/60, decimals=0), cwtmatr_yflip)	
 
-	#cbar = fig.colorbar(pos, ax=axs[2])
+	cbar = fig.colorbar(pos, ax=axs[2], label="Squared Amplitude (Power?) (If Real Projection)", location="bottom", shrink=0.6)
 	"""	
 	yticks = ax.get_yticks()
 	yticks = yticks[yticks>=0]
@@ -557,19 +591,24 @@ def wavelet_transform(timevec, data, gaps, onsets, durations):
 	order=4
 	
 	try:
-		circadian_bandpass = butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order)
-		axs[1].plot(timevec, remove_reflect(circadian_bandpass), c="r", alpha=0.5)
-		axs[1].plot(timevec, cut_gaps(remove_reflect(circadian_bandpass), gaps), c="r", label="Circadian Band (21h-33h)")
-		axs[1].set_title("Bandpass-filtered Circadian Rhythm (21h-33h)", loc="right")
+		#circadian_bandpass = butter_bandpass_filter(data, lowcut=lowcut, highcut=highcut, fs=fs, order=order)
+		#axs[1].plot(timevec, remove_reflect(circadian_bandpass), c="r", alpha=0.5)
+		#axs[1].plot(timevec, cut_gaps(remove_reflect(circadian_bandpass), gaps), c="r", label="Circadian Band (21h-33h)")
+		#axs[1].set_title("Bandpass-filtered Circadian Rhythm (21h-33h)", loc="right")
+
+		# IF USING REAL PROJECTION:
+		period = 24
+		circadian_waveletfilt = cwtmatr_yflip[np.where(periods==period*60*60)][0]	
+		axs[1].plot(timevec, circadian_waveletfilt, c="r", alpha=0.5)
+		axs[1].plot(timevec, cut_gaps(circadian_waveletfilt, gaps), c="r", label="Circadian (24h) Wavelet Filtered")
+		axs[1].set_title(f"Circadian Rhythm ({period}h Narrowband Wavelet Filtered)", loc="right")
+	
+
 	except ValueError as ve:
 		print(ve)
 		pass
 
 
-	data = remove_reflect(data)
-	axs[0].plot(timevec, data, color="black", alpha=0.5)
-	axs[0].plot(timevec, cut_gaps(data, gaps), color="black")
-	axs[0].set_title("Original Data", loc="right")
 	
 
 	for ax in axs:
@@ -599,16 +638,31 @@ def simulate_data():
 		# phi = phase - where, in radians, the cycle is at t=0
 		return A * np.sin((2*np.pi*(1/(hours*60*60))*timevec) + phi)
 
-	circadian1 = rhythym(24, 10, 0); data = circadian1
-	#circadian2 = rhythym(19, 10, 0); data += circadian2
-	#multidien = rhythym(50, 10, 0);  data += multidien
-	#ultradian1 = rhythym(5, 10, 0);  data += ultradian1
-	ultradian2 = rhythym(3, 10, 0);  data += ultradian2
+	def rhythym_chirp(hours0, t1, hours1, A=10, phi=0, method="linear"):
+		# A = amplitude; sinewave will be centered around 0, with max amplitude at A and minimum at -A 
+		# phi = phase - where, in radians, the cycle is at t=0
+		return A * signal.chirp(timevec, f0=1/(hours0*60*60), t1 = t1, f1=1/(hours1*60*60), method=method, phi=phi)
+ 
 	
 	shift = 85 #add this to sinewave, to shift it from being mean-centered, so it resembles a mean IHR
+	
+	data = np.zeros(len(timevec))
+	#circadian1 = rhythym(24, A=12, phi=0); data += circadian1 
+	circadian1 = signal.sawtooth(2*np.pi*(1/(24))*timevec/60/60); data += circadian1
+	#circadian2 = rhythym(19, A=10, phi=0); data += circadian2
+	
+	##multidien = rhythym(50, A=2, phi=0);  data += multidien
+	
+	#ultradian1 = rhythym(12, A=5, phi=1);  data += ultradian1
+	##ultradian2 = rhythym(3, A=3, phi=0) * np.hanning(len(timevec));  data += ultradian2
+	#ultradian3 = rhythym_chirp(12, np.median(timevec), 10, A=5, method="linear"); data+= ultradian3
+
+	#noise = 3* np.random.normal(0, 1, len(timevec)); data += noise 
+	
 	data += shift
 
 	#data = multidien + circadian + (ultradian(1, 20) * np.hanning(n_segments)) + shift
+
 
 	return data	
 
@@ -634,61 +688,104 @@ def get_ecg_channel_subdirs(out):
 
 
 if __name__ == "__main__":
-	subject = "1379_first"
-	root = constants.SUBJECT_DATA_ROOT.format(subject=subject)
-	subject_out = constants.SUBJECT_DATA_OUT.format(subject=subject)
+	#subject = "909_test"
+	subjects = ["sim", "none", "909_test"]
 
-	rng = np.random.default_rng(1905)
+	start = time.time()
+	
+	now = datetime.datetime.now()
 
+	logfile_dir = constants.SUBJECT_DATA_OUT.format(subject='LOGS')	
+	os.makedirs(logfile_dir, exist_ok=True)
+	logfile_loc = f"{logfile_dir}/logfile_{now.day}_{now.month}_{now.year}.txt"	
 
-	if not subject=="sim":
-		# collate data and resolve overlaps
-		run_speedyf(root, subject_out); 
+	with open(logfile_loc, "w") as logfile:
+		logfile.write(str(now))
+		logfile.write("\n")
+		logfile.write(f"{len(subjects)}\tsubjects:\t{subjects}")
+		logfile.write("\n")
 		
-		# produce hrv metric dataframes, and save to out/
-		calculate_hrv_metrics(root, subject_out, rng)# will not re-calculate if dataframes already present in out
+	i = 0
+	for subject in subjects:
 
-		# does the subject have multiple ECG channels?
-		ecg_subdirs = get_ecg_channel_subdirs(subject_out)
-		if len(ecg_subdirs) > 0:
-			outs = [os.path.join(subject_out, subdir) for subdir in ecg_subdirs]
-		else:
-			outs = [subject_out]
+		print(f"\n$RUNNING FOR SUBJECT: {subject}\n")
 	
-		for out in outs:
+		try:
 
-			# load the hrv metric dataframes we just produced
-			time_dom_df, freq_dom_df, modification_report_df = load_hrv_dataframes(out)
+			root = constants.SUBJECT_DATA_ROOT.format(subject=subject)
+			subject_out = constants.SUBJECT_DATA_OUT.format(subject=subject)
 
-			# what metric are we interested in?
-			data = time_dom_df["hr_mean"]
-			#data = freq_dom_df["fft_ratio"]
-			data = np.array(data)
-		
-			# get timestamps corresponding to segments
-			timevec = edf_segment.EDFSegmenter(root, subject_out, segment_len_s=300).get_segment_onsets(as_datetime=True)
+			rng = np.random.default_rng(1905)
+
+
+			if not subject=="sim":
+				# collate data and resolve overlaps
+				run_speedyf(root, subject_out); 
+				
+				# produce hrv metric dataframes, and save to out/
+				calculate_hrv_metrics(root, subject_out, rng)# will not re-calculate if dataframes already present in out
+
+				# does the subject have multiple ECG channels?
+				ecg_subdirs = get_ecg_channel_subdirs(subject_out)
+				if len(ecg_subdirs) > 0:
+					outs = [os.path.join(subject_out, subdir) for subdir in ecg_subdirs]
+				else:
+					outs = [subject_out]
 			
-			# get timestamps corresponding to seizures and their durations
-			onsets, durations = get_seizures(subject)
+				for out in outs:
+
+					# load the hrv metric dataframes we just produced
+					time_dom_df, freq_dom_df, modification_report_df = load_hrv_dataframes(out)
+
+					# what metric are we interested in?
+					data = time_dom_df["hr_mean"]
+					#data = freq_dom_df["fft_ratio"]
+					data = np.array(data)
+				
+					# get timestamps corresponding to segments
+					timevec = edf_segment.EDFSegmenter(root, subject_out, segment_len_s=300).get_segment_onsets(as_datetime=True)
+					
+					# get timestamps corresponding to seizures and their durations
+					onsets, durations = get_seizures(subject)
+					
+					# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
+					interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
+
+					# perform multi-resolution analysis (signal decomposition)	
+					mra(out, timevec, interpolated, gaps, onsets, durations, sharey=False)
+
+					# perform time-frequency analysis using wavelet_transform
+					wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
 			
-			# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
-			interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
+			else:
+				data = simulate_data()
 
-			# perform multi-resolution analysis (signal decomposition)	
-			mra(out, timevec, interpolated, gaps, onsets, durations, sharey=False)
+				# simulate missing data
+				data[math.floor(np.quantile(range(0, len(data)), 0.7)): math.ceil(np.quantile(range(0, len(data)), 0.8))] = np.NaN # large gap
+				data[np.random.choice(len(data), math.floor(len(data) * 0.1))] = np.NaN
 
-			# perform time-frequency analysis using wavelet_transform
-			wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
-	
-	else:
-		data = simulate_data()
+				timevec = [datetime.datetime.fromtimestamp(0) + datetime.timedelta(seconds=(i * 300)) for i in range(0, len(data))]
 
-		timevec = [datetime.datetime.fromtimestamp(0) + datetime.timedelta(seconds=(i * 300)) for i in range(0, len(data))]
+				onsets = durations = []
+			
+				interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
 
-		onsets = durations = []
-	
-		interpolated, timevec, gaps = interpolate_gaps(data, timevec) 
+				mra(subject_out, timevec, interpolated, gaps, onsets, durations, sharey=False)
 
-		mra(subject_out, timevec, interpolated, gaps, onsets, durations, sharey=False)
+				wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
+			
+			with open(logfile_loc, "a") as logfile:
+				logfile.write(f"\n{i+1}/{len(subjects)}:\t{subject}:\tSuccess")
 
-		wavelet_transform(timevec, interpolated, gaps, onsets, durations)	
+		except Exception as e:
+			with open(logfile_loc, "a") as logfile:
+				logfile.write(f"\n{i+1}/{len(subjects)}:\t{subject}:\t{e}")
+
+
+		i += 1
+
+
+	end = time.time()
+
+	with open(logfile_loc, "a") as logfile:
+		logfile.write(f"\nComplete@{str(datetime.datetime.now())}!\tRuntime:{end-start}")
