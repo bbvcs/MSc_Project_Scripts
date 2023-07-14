@@ -19,6 +19,7 @@ vmdpy = "*"
 pywavelets = "*"
 emd-signal = "*"
 openpyxl = "*"
+pyts = "*"
 
 [dev-packages]
 
