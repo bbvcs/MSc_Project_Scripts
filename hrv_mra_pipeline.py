@@ -24,7 +24,7 @@ sys.path.append(constants.SPEEDYF_LOCATION)
 from speedyf import edf_collate, edf_overlaps, edf_segment
 
 sys.path.append(constants.HRV_PREPROC_LOCATION)
-from hrv_preprocessor.hrv_preprocessor import hrv_per_segment, produce_hrv_dataframes, save_hrv_dataframes, load_hrv_dataframes
+from hrv_preprocessor.hrv_preprocessor import hrv_per_segment, produce_hrv_dataframes, save_hrv_dataframes, load_hrv_dataframes, time_dom_keys, freq_dom_keys
 
 # TODO REMEMBER TO CITE PACKAGES
 import emd  # EMD, EEMD
@@ -32,6 +32,21 @@ import emd  # EMD, EEMD
 import pywt # Wavelet Transform?
 import vmdpy # Variational Mode Decomposition
 from pyts import decomposition
+
+from neurodsp.sim import sim_powerlaw
+from neurodsp.utils import set_random_seed
+
+ULTRADIAN_COLOR = "#DED5E8"
+CIRCADIAN_COLOR ="#CCE5D7"
+INFRADIAN_COLOR ="#EED8CD"
+
+ULTRADIAN_MIN, ULTRADIAN_MAX = 0, 20
+CIRCADIAN_MIN, CIRCADIAN_MAX = 20, 30
+INFRADIAN_MIN, INFRADIAN_MAX = 30, 320#168#72 
+
+
+HARMONICS_24H = [1/(multiplier*(1/(24*60*60)))/60/60 for multiplier in np.arange(2, 100)] 
+#HARMONICS_24H = [48, 16, 8, 4.8, 3.4, 2.8, 2.1, 1.8]
 
 """ UTILITY FUNCTIONS """
 
@@ -101,6 +116,7 @@ def convert_unixtime_ms_to_datetime(unix_epoch_ms):
 	# add ms
 	return timestamp + datetime.timedelta(milliseconds=ms)
 
+
 def components_plot_old(components, original, out, title, gaps, sharey=True):
 	fig, ax = plt.subplots(len(components)+2, 1, sharex=True, sharey=sharey, figsize=(19.20, 19.20))
 
@@ -132,6 +148,10 @@ def components_plot_old(components, original, out, title, gaps, sharey=True):
 
 def components_plot(timevec, components, original, out, title, gaps, onsets, durations, sharey=True):
 
+
+	plot_title = title_fullname(title)
+
+
 	out = os.path.join(out, "components_plots")
 	if not os.path.exists(out):
 		print("Setting up directory for MRA Output: at '{}'".format(out))
@@ -140,9 +160,11 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 
 	""" 1. Plot Components and 2. Plot PSDs of Components"""
 
-	fig1, ax1 = plt.subplots(len(components)+2, 1, sharex=True, sharey=sharey, figsize=(19.20, 19.20)) # the components
-	fig2, ax2 = plt.subplots(len(components)+2, 1, sharex=False, sharey=False, figsize=(19.20, 19.20)) # PSDs of the components
-	plt.subplots_adjust(bottom=0.04, top=0.921, hspace=0.402)
+	sz = 16
+	fig1, ax1 = plt.subplots(len(components)+2, 1, sharex=True, sharey=sharey, figsize=(sz, sz)) # the components
+	plt.subplots_adjust(bottom=0.10, top=0.921, hspace=0.402)
+	fig2, ax2 = plt.subplots(len(components)+2, 1, sharex=True, sharey=False, figsize=(sz, sz)) # PSDs of the components
+	plt.subplots_adjust(bottom=0.10, top=0.921, hspace=0.402)
 
 	#x_original = range(0, len(original))
 	#x_imfs = range(0, components.shape[1])
@@ -190,7 +212,7 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 	ax2[1].set_title("Reconstruction", loc="left")	
 
 	components_total_powers = []
-	components_to_ignore = []	
+	#components_to_ignore = []	
 	for i, comp in enumerate(components):
 		ax1[i+2].plot(x_imfs, comp, color=c, alpha=alpha)
 		ax1[i+2].plot(x_imfs, cut_gaps(comp, gaps), color=c)
@@ -206,10 +228,10 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 		ax2[i+2].set_xlim(ax2_xlim)
 		ax2[i+2].set_title(f"Component #{i}", loc="left")
 
-		if ((component_total_power/reconstruction_total_power) * 100) <= 1: # if contributes less than 1% to the original total power, ignore this IMF
-			ax1[i+2].set_facecolor("grey") 
-			ax2[i+2].set_facecolor("grey") 
-			components_to_ignore.append(i)
+		#if ((component_total_power/reconstruction_total_power) * 100) <= 1: # if contributes less than 1% to the original total power, ignore this IMF
+			#ax1[i+2].set_facecolor("grey") 
+			#ax2[i+2].set_facecolor("grey") 
+			#components_to_ignore.append(i)
 
 	"""
 	components_total_powers_sorted = np.array(sorted(components_total_powers, reverse=True))
@@ -237,29 +259,30 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 	#print(np.array(components_total_powers)/original_total_power * 100)
 	#print(np.quantile(np.array(components_total_powers)/original_total_power * 100, 0.25))
 
-	fig1.suptitle(title)
+
+	soz = None
+	fig1.suptitle(plot_title+" Components")
 	for ax in ax1:
 		ax.xaxis.set_major_formatter(DateFormatter("%d/%m %H:%M:%S"))
 		
 		for onset, duration in zip(onsets, durations):
-			ax.axvspan(onset, onset + datetime.timedelta(seconds=duration), color="r", alpha=0.5)
+			soz = ax.axvspan(onset, onset + datetime.timedelta(seconds=duration), color="r", alpha=0.5)
 	
 	fig1.supxlabel("Time (d/m h:m:s)")
-	fig1.savefig(os.path.join(out, title))
 
 	
-	fig2.suptitle(title+"_PSD")
-	fig2.supylabel("")
+	fig2.suptitle(plot_title+" Components PSDs")
+	fig2.supylabel("Power")
 	fig2.supxlabel("Period (h)")
 	handles, labels = ax2[-1].get_legend_handles_labels() # get from last axis only, to avoid duplicates
 	fig2.legend(handles, labels)
 
-	fig2.savefig(os.path.join(out, title+"_PSD"))
 
-
-
-	""" 3. Produce plot where components are stacked, and the peak (maximum) frequency highlighted for each component.""" 
 	
+	greyscale = None
+	""" 3. Produce plot where components are stacked, and the peak (maximum) frequency highlighted for each component.""" 
+	minimum_rhythmic_period_s = 3000 # 3000s=50m	
+
 	peaks_powers = {}  # dict of peak period -> power
 	cmap = matplotlib.colormaps["ocean"]
 	fig3, ax3 = plt.subplots(figsize=(10.80, 10.80)) 
@@ -279,7 +302,8 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 		ax3.plot(f, Pxx_den, c=color, label=label)
 		ax3.fill_between(f, Pxx_den, color=color)
 	
-		if not i in components_to_ignore:	
+		#if not i in components_to_ignore: # TODO THIS IS NO LONGER USED. SWITCHED TO MINIMUM RHYTHMIC PERIOD.	
+		if peak_period_s >= minimum_rhythmic_period_s:
 
 			if not peak_period_h in peaks_powers.keys():
 				peaks_powers[peak_period_h] = peak_Pxx
@@ -291,30 +315,55 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 			
 
 			ax3.scatter(peak_freq, peak_Pxx, marker="x", c="r", zorder=10)
+			ax2[i+2].stem(peak_freq, peak_Pxx, markerfmt="r")# zorder=10)
+			ylim_min, ylim_max = ax2[i+2].get_ylim()
+			ax2[i+2].text(1/(0.98*60*60), np.median([ylim_min,ylim_max]), f"{np.round((1/peak_freq)/60/60, decimals=2)}h", fontsize="x-large")
+		else:
+			ax1[i+2].set_facecolor("grey") 
+			ax2[i+2].set_facecolor("grey") 
+			ylim_min, ylim_max = ax2[i+2].get_ylim()
+			ax2[i+2].text(1/(0.98*60*60), np.median([ylim_min,ylim_max]), f"{np.round((1/peak_freq)/60/60, decimals=2)}h", fontsize="x-large", color="grey")
 
+
+	if soz:
+		fig1.legend([soz], ["Seizures"])
+
+	fig1.savefig(os.path.join(out, title))
+	plt.close(fig1)
+	
+	fig2.savefig(os.path.join(out, title+"_PSD"))
+	plt.close(fig2)
 
 	ax3.set_xscale("log")
 	ax3.legend(loc="upper right")
 	fig3.suptitle(title+" Components PSDs Overlaid")
 	fig3.supxlabel("Frequency (Hz)")
 	fig3.savefig(os.path.join(out, title+"_PSD_OVERLAY"))
+	plt.close(fig3)
 
 	return peaks_powers
 
 
 def psd(data, sample_rate):
-	""" # FFT
+	# FFT
 	data = data - np.mean(data) # remove DC Offset (0Hz Spike)
 	yf = fft.rfft(data)
 	xf = fft.rfftfreq(len(data), 1/sample_rate)
 	return xf, np.abs(yf)
 	"""
+	
+	len_data_m = len(data) * 5
+	len_data_h = len_data_m/60
+
 	# Welch
-	hours_per_seg = 48#24
+	hours_per_seg = 48 #len_data_h*0.75 #48
+	overlap_hours = 40 #hours_per_seg * 0.75 #40
 	min_per_seg = hours_per_seg * 60	
 	nperseg = (min_per_seg//5) # how many 5min HRV segments in our welch segment
-	#return signal.welch(data, sample_rate, nperseg=nperseg, noverlap=nperseg//2, scaling="density")	
-	return signal.welch(data, sample_rate, nperseg=nperseg, noverlap=((40*60)//5), scaling="density")	
+	return signal.welch(data, sample_rate, nperseg=nperseg, noverlap=((overlap_hours*60)//5), scaling="density")	
+	
+	"""
+	
 
 
 def psd_plot(data, sample_rate): # warn; can't use fft with HRV, irregularly sampled
@@ -325,8 +374,12 @@ def psd_plot(data, sample_rate): # warn; can't use fft with HRV, irregularly sam
 	return fig, ax
 
 def extend(data, out=None, metric=None):
-	
+	#print("REMOVE ME NO EXTEND")
+	#return data
+		
 	padlen = len(data) // 2
+
+	data = data.copy()
 	
 	# 1. 
 	m = np.mean(data)
@@ -363,7 +416,7 @@ def extend(data, out=None, metric=None):
 		#ax[0].text(padlen+right_x[0], right_y[0]+10, right_res.slope, c="r")
 		ax[0].legend()
 
-	SLOPE_THRESH = 0.5
+	SLOPE_THRESH = 0.1
 
 	if np.abs(left_res.slope) < SLOPE_THRESH:
 		left_mode = "symmetric"
@@ -403,27 +456,33 @@ def extend(data, out=None, metric=None):
 		ax[2].plot(plotting_x[padlen:], extended_right[padlen:], c=rc)
 		ax[2].set_title(f"Right Extension: {verbose_mode(right_mode)}", loc="left")
 
-		ax[3].plot(plotting_x[0:padlen], extended_left[0:padlen], c=lc)
+		ax[3].plot(plotting_x[:padlen+1], extended_left[:padlen+1], c=lc)
 		ax[3].plot(plotting_x[padlen+len(data):], extended_right[padlen+len(data):], c=rc)
 		ax[3].plot(plotting_x[padlen:padlen+len(data)], data, c="black")
 		ax[3].set_title(f"Extension Result", loc="left")
 
 		ax[4].plot(plotting_x[padlen:padlen+len(data)], extended[padlen:padlen+len(data)], c="black")
-		ax[4].plot(plotting_x[:padlen], extended[:padlen], c=lc)
+		ax[4].plot(plotting_x[:padlen+1], extended[:padlen+1], c=lc)
 		ax[4].plot(plotting_x[padlen+len(data):], extended[padlen+len(data):], c=rc)
-		ax[4].set_title(f"Extension Result w/ Taper + Original Data Mean", loc="left")
+		ax[4].set_title(f"Extension Result + Taper + Original Data Mean", loc="left")
 
 		ax[0].sharex(ax[3])
 
+		out = os.path.join(out, "preprocessing_plots")
+		if not os.path.exists(out):
+			os.makedirs(out, exist_ok=True)
+
+		fig.suptitle("Signal Boundary Extension")
 		fig.savefig(os.path.join(out, f"{metric}_extend"))
+		plt.close(fig)
 
-
-	print("REMOVE ME RAISE EXCEPTION EXTEND")
-	raise Exception
-
+	return extended
 
 def remove_extend(data):
 	"""Remove data added by extend()"""
+	#print("REMOVE ME NO EXTEND (def remove_extend)")
+	#return data
+	
 	padlen = len(data) // 4	 # AS LONG AS padlen = len(data)//2 in extend(), this should work?
 	return data[padlen:-padlen]
 
@@ -463,15 +522,19 @@ def cut_gaps(data, gaps):
 
 def interpolate_gaps(data, timevec, ax, out, metric):
 
+	out = os.path.join(out, "preprocessing_plots")
+	if not os.path.exists(out):
+		os.makedirs(out, exist_ok=True)
 
 	# find outlier spikes
-	fig, ax_outliers = plt.subplots(figsize=(10.8, 10.8))
-	ax_outliers.plot(timevec, data, c="black")
+	fig, ax_outliers = plt.subplots(2, 1, figsize=(10.8, 10.8))
+	ax_outliers[0].plot(timevec, data, c="black")
+	"""
 	rolling_mean   = np.zeros(shape=len(data))
 	rolling_std    =  np.zeros(shape=len(data))
 	rolling_zscore = np.zeros(shape=len(data))
 	for j in range(0, len(data)):
-		width = 60 # each datapoint represents 5m, so window is 5 * width m long duration
+		width = 12 # each datapoint represents 5m, so window is 5 * width m long duration
 		window = data[max(j-(width//2),0):min(j+(width//2), len(data))]
 		rolling_mean[j] = np.nanmean(window)
 		rolling_std[j] = np.nanstd(window)
@@ -479,31 +542,37 @@ def interpolate_gaps(data, timevec, ax, out, metric):
 	ax_outliers.plot(timevec, rolling_mean, c="orange", alpha=1, label="Rolling Mean")
 	ax_outliers.plot(timevec, rolling_std, c="lime", alpha=1, label="Rolling Std. Dev.")
 	ax_outliers.plot(timevec, rolling_zscore, c="deepskyblue", alpha=1, label="Rolling Z-Score")
-	
+	"""	
 	Z_THRESH = 3
-	ax_outliers.axhline(Z_THRESH, c="r", alpha=0.3, label=f"Z-Score Threshold ({Z_THRESH})")
-	outliers = np.where(np.abs(rolling_zscore) > Z_THRESH)[0]
-	ax_outliers.scatter(np.array(timevec)[outliers], data[outliers], marker="x", c="r", label=f"Outliers determined via Rolling Z-Score Threshold (Window Length = {width} * 5m = {(width*5)/60}h)")
-	ax_outliers.set_xlabel("Time")
-	
-	# try to find jumps (spikes, but more prolonged; might be missed by spike detection method)
-	J_THRESH = 2 * np.nanmean(rolling_mean)
-	jumps = np.where(data >= J_THRESH)[0]
-	ax_outliers.axhline(J_THRESH, c="g", alpha=0.3, label=f"Rolling Mean Threshold ({J_THRESH})")
-	ax_outliers.scatter(np.array(timevec)[jumps], data[jumps], marker="x", c="g", label="Outliers detected via 2*Mean of Rolling Mean")
+
+	zscores = np.abs(stats.zscore(data, nan_policy="omit"))	
+	ax_outliers[1].plot(timevec, zscores, c="blue")
+	ax_outliers[1].axhline(Z_THRESH, c="r", alpha=0.3, label=f"Z-Score Threshold ({Z_THRESH})")
+	ax_outliers[1].set_ylabel("Absolute Z-Score")
+
+	outliers = np.where(zscores > Z_THRESH)[0]
+	ax_outliers[0].scatter(np.array(timevec)[outliers], data[outliers], marker="x", c="r", label=f"Outliers")
+	fig.supxlabel("Time")
 		
-	ax_outliers.set_title("Outliers Detection")
-	fig.legend()
+
+	"""
+	# try to find jumps (spikes, but more prolonged; might be missed by spike detection method)
+	J_THRESH = 1.5 * np.nanmean(rolling_mean)
+	jumps = np.where(data >= J_THRESH)[0]
+	ax_outliers.axhline(J_THRESH, c="g", alpha=0.3, label=f"1.5*Median of Rolling Mean Threshold ({J_THRESH})")
+	ax_outliers.scatter(np.array(timevec)[jumps], data[jumps], marker="x", c="g", label="Outliers detected via 2*Mean of Rolling Mean")
+	"""	
+
+	fig.legend()	
+	fig.suptitle(f"{metric} Outlier Detection via Z-Score Threshold")
 	fig.savefig(os.path.join(out, f"{metric}_outlier_spikes"))
+	plt.close(fig)
 
 	# remove outlier spikes, will be interpolated
 	data[outliers] = np.NaN
-	data[jumps] = np.NaN
 	ax[1].plot(timevec, data, c="black")
 	ax[1].set_title("Outliers Removed", loc="left")
 	ax[1].set_xlim([min(timevec), max(timevec)]) 
-
-
 
 
 
@@ -551,6 +620,9 @@ def interpolate_gaps(data, timevec, ax, out, metric):
 		# remove small, isolated islands of data; islands with lengths < 10% of data length, surrounded by gaps with total length > 10% data len
 		thresh = len(data) * 0.10
 		for n, island in enumerate(islands):
+			
+			# only consider  
+
 			island_length = island[1] - island[0]
 			if island_length < thresh:
 
@@ -622,6 +694,49 @@ def get_seizures(subject):
 	return subject_seizures["start"], subject_seizures["duration"]
 
 
+def metric_fullname(metric):
+	mapping = {
+		"fft_ratio": "LF/HF Ratio",
+		"hr_mean": "Mean IHR",
+		"tri_index": "Triangular Index",
+		"fft_rel_VLF": "Relative VLF Power",
+		"fft_rel_LF": "Relative LF Power",
+		"fft_rel_HF": "Relative HF Power",
+		}
+	if metric in mapping.keys():
+		return mapping[metric]
+	else:
+		return str(metric).upper()
+	
+
+def method_fullname(method):
+
+	if "DWT" in method:
+		
+		mapping = {"DWT_bior4-4": "DWT Biorthogonal 4.4 Wavelet", 
+			"DWT_coif4": "DWT Coiflet 4", 
+			"DWT_db4": "DWT Daubechies 4 Wavelet", 
+			"DWT_dmey": "DWT Discrete Meyer Wavelet", 
+			"DWT_sym4": "DWT Symlet 4"}
+
+		return mapping[method]
+	else:
+		return method
+
+def title_fullname(title):
+
+	if "DWT" in title:
+
+		method = title.split("_DWT_")[1]
+		method = f"DWT_{method}"
+	else:
+		method = title.split("_")[-1]
+
+	metric = title.split(f"_{method}")[0]
+
+	return f"{method_fullname(method)} {metric_fullname(metric)}"
+
+
 """ PIPELINE FUNCTIONS """
 
 def run_speedyf(root, out):
@@ -686,10 +801,6 @@ def calculate_hrv_metrics(root, out, rng, forced=False):
 	time_dom_hrvs = []
 	modification_reports = []
 
-	# TODO keys defined again in produce hrv_dataframes
-	time_dom_keys = np.array(['nni_counter', 'nni_mean', 'nni_min', 'nni_max', 'hr_mean', 'hr_min', 'hr_max', 'hr_std', 'nni_diff_mean', 'nni_diff_min', 'nni_diff_max', 'sdnn', 'sdnn_index', 'sdann', 'rmssd', 'sdsd', 'nn50', 'pnn50', 'nn20', 'pnn20', 'nni_histogram', 'tinn_n', 'tinn_m', 'tinn', 'tri_index'])
-	freq_dom_keys = np.array(['fft_bands', 'fft_peak', 'fft_abs', 'fft_rel', 'fft_log', 'fft_norm', 'fft_ratio', 'fft_total', 'fft_plot', 'fft_nfft', 'fft_window', 'fft_resampling_frequency', 'fft_interpolation'])
-
 	print("Gathering Segments...")
 	for segment in segmenter:
 		print(f"{segment.idx}/{segmenter.get_max_segment_count()-1}")
@@ -735,10 +846,16 @@ def mra(out, metric, timevec, data, gaps, onsets, durations, sharey=False):
 
 	fs = 1/300 # TODO this should be param
 
+
+	data = extend(data, out, metric)
 	
+	# # # #
+	#print("REMOVE ME MEAN CENteR AND LOWPASS")
 	#data = data - np.mean(data)
 	#data = butter_lowpass_filter(data, 1/(1*60*60), fs=fs, order=12)
 	#data = butter_lowpass_filter(data, 1/(0.5*60*60), fs=fs, order=48)
+	# # # #
+	
 
 	methods_peaks = {}  # dict of str mode decomposition method -> dict of peak periods of the components identified by those methods and the power WITHIN THE COMPONENT of that period
 
@@ -746,12 +863,13 @@ def mra(out, metric, timevec, data, gaps, onsets, durations, sharey=False):
 	title = f"{metric}_EMD"
 	imfs = emd.sift.sift(data).T
 	#emd2 = EMD(); imfs = emd2(data)
-	methods_peaks["EMD"] = components_plot(timevec, imfs, data, out, title, gaps, onsets, durations, sharey=sharey)
+	# TODO remove extension from data, imfs
+	methods_peaks["EMD"] = components_plot(timevec, np.apply_along_axis(remove_extend, 1, imfs), remove_extend(data), out, title, gaps, onsets, durations, sharey=sharey)
 
 	# perform VMD (using CFSA to determine optimal K)
 	title = f"{metric}_VMD"
 	# initialise parameters
-	alpha = 3000#(1/6) * (300)  # bandwidth constraint (2000 = "moderate") 
+	alpha = 2000 # bandwidth constraint (2000 = "moderate") 
 	tau = 0.      # noise-tolerance (no strict fidelity enforcement)  
 	K = len(imfs)         # n of modes to be recovered  
 	DC = 0        # no DC part imposed  
@@ -830,14 +948,15 @@ def mra(out, metric, timevec, data, gaps, onsets, durations, sharey=False):
 
 	u, u_hat, omega = vmdpy.VMD(data, alpha, tau, K, DC, init, tol)
 	u = np.flipud(u)
-	methods_peaks["VMD"] = components_plot(timevec, u, data, out, title, gaps, onsets, durations, sharey=sharey)
+	methods_peaks["VMD"] = components_plot(timevec, np.apply_along_axis(remove_extend, 1, u), remove_extend(data), out, title, gaps, onsets, durations, sharey=sharey)
 	
 
 	# perform EEMD
 	title = f"{metric}_EEMD"
-	imfs = emd.sift.ensemble_sift(data, nensembles=4, nprocesses=3, ensemble_noise=1).T
+	np.random.seed(1905)
+	imfs = emd.sift.ensemble_sift(data, nprocesses=1).T
 	imfs = imfs[1:]
-	methods_peaks["EEMD"] = components_plot(timevec, imfs, data, out, title, gaps, onsets, durations, sharey=sharey)
+	methods_peaks["EEMD"] = components_plot(timevec, np.apply_along_axis(remove_extend, 1, imfs), remove_extend(data), out, title, gaps, onsets, durations, sharey=sharey)
 	
 	# perform DWT MRA
 	for wavelet in ["sym4", "db4", "bior4.4", "coif4", "dmey"]:
@@ -847,10 +966,10 @@ def mra(out, metric, timevec, data, gaps, onsets, durations, sharey=False):
 		output = np.flip(output, axis=0)
 		if '.' in wavelet:
 			title = f"{metric}_DWT_{'-'.join(wavelet.split('.'))}" # will mess up saving to file if . present in title
-			methods_peaks[f"DWT_{'-'.join(wavelet.split('.'))}"] = components_plot(timevec_wt, output, data_wt, out, title, gaps, onsets, durations, sharey=sharey)	
+			methods_peaks[f"DWT_{'-'.join(wavelet.split('.'))}"] = components_plot(timevec_wt, np.apply_along_axis(remove_extend, 1, output), remove_extend(data_wt), out, title, gaps, onsets, durations, sharey=sharey)	
 		else:
 			title = f"{metric}_DWT_{wavelet}"
-			methods_peaks[f"DWT_{wavelet}"] = components_plot(timevec_wt, output, data_wt, out, title, gaps, onsets, durations, sharey=sharey)	
+			methods_peaks[f"DWT_{wavelet}"] = components_plot(timevec_wt, np.apply_along_axis(remove_extend, 1, output), remove_extend(data_wt), out, title, gaps, onsets, durations, sharey=sharey)	
 
 	# perform SSA (Singular Spectrum Analysis)
 	title = f"{metric}_SSA"
@@ -858,14 +977,14 @@ def mra(out, metric, timevec, data, gaps, onsets, durations, sharey=False):
 	components = decomposition.SingularSpectrumAnalysis(window_size=max(2, K)).fit_transform(data.reshape(1, -1))
 	components = components[0]
 	components = np.flipud(components)
-	methods_peaks["SSA"] = components_plot(timevec, components, data, out, title, gaps, onsets, durations, sharey=sharey)
+	methods_peaks["SSA"] = components_plot(timevec, np.apply_along_axis(remove_extend, 1, components), remove_extend(data), out, title, gaps, onsets, durations, sharey=sharey)
 
 
 	# perform CWT 
 	methods_peaks["CWT"] = wavelet_transform(timevec, data, gaps, onsets, durations, metric, out)	
 
 
-	data = extend(data)	
+	"""
 	# filter out the peaks identified	
 	methods=["EMD", "EEMD", "VMD", "DWT_coif4"]	
 	for method in methods:
@@ -932,8 +1051,9 @@ def mra(out, metric, timevec, data, gaps, onsets, durations, sharey=False):
 		fig.supxlabel("Time (d/m h:m:s)")
 		fig.suptitle(f"Filtered_Peaks_{method}")
 		fig.savefig(os.path.join(out, "components_plots", f"Filtered_Peaks_{method}"))
+		plt.close(fig)
 
-
+	"""
 	# convert methods_peaks to df
 
 	unique_peaks = set()
@@ -960,15 +1080,18 @@ def wavelet_transform(timevec, data, gaps, onsets, durations, metric, out):
 	#w = 5 # default Omega0 param for morlet2 (5.0). Seems to control frequency of complex sine part?
 	
 
-	fig, axs = plt.subplots(3,1,sharex=True, height_ratios=[2, 1, 7], figsize=(19.20, 19.20))
+	fig, axs = plt.subplots(3,1,sharex=True, height_ratios=[2, 1, 7], figsize=(19.2, 19.2))
+
+	# remove these 2 lines and code should work as before
+	fig, ax = plt.subplots(figsize=(10, 7))
+	axs[2] = ax # so axs[2] is now ax
+
 	
-	axs[0].plot(timevec, data, color="black", alpha=0.5)
-	axs[0].plot(timevec, cut_gaps(data, gaps), color="black")
+	axs[0].plot(timevec, remove_extend(data), color="black", alpha=0.5)
+	axs[0].plot(timevec, cut_gaps(remove_extend(data), gaps), color="black")
 	axs[0].set_title("Original Data", loc="right")
 
 	data = data - np.mean(data) # remove DC offset, otherwise a lot of power at very low frequencies	
-	data = extend(data)
-	
 
 	#freqs = np.array([1/(24*60*60), 1/(18*60*60),1/(14*60*60),1/(12*60*60),1/(10*60*60),1/(8*60*60),1/(6*60*60),1/(4*60*60),1/(2*60*60),1/(1*60*60)])	
 	#freqs = np.linspace(freqs[0], freqs[-1], 10000)
@@ -976,13 +1099,18 @@ def wavelet_transform(timevec, data, gaps, onsets, durations, metric, out):
 	#freqs = 
 	#freqs = np.linspace(0, fs/2, 10000)
 
+	#some old ways to define periods
 	#periods = 1/freqs
 	#periods = np.array([days*24*60*60 for days in range(13, 1, -1)] + [hours*60*60 for hours in range(47, 0, -1)])
 	#periods = np.array([hours*60*60 for hours in range(288, 0, -1)])
-	periods = np.array([hours*60*60 for hours in np.arange(73, 0, -1)])
+	
+	# way to define periods I actually used for a bit
+	#periods = np.array([hours*60*60 for hours in np.arange(73, 0, -1)])
+	periods = np.array([hours*60*60 for hours in np.arange(200, 0, -1)])
 	freqs = 1/periods
 	
-	w = np.linspace(30, 3, len(periods)) # omega
+	#w = np.linspace(30, 3, len(periods)) # omega (for when top was 73)
+	w = np.linspace(82, 3, len(periods)) # 200 (new top) / 73 = 2.73972... . So 30 *2.73 gives a new top omega, ~82
 	#w = 5
 
 	widths = w * fs / (2 * freqs * np.pi)
@@ -1004,7 +1132,7 @@ def wavelet_transform(timevec, data, gaps, onsets, durations, metric, out):
 	#cwtmatr_yflip = cwtmatr_yflip.real 
 
 	# remove padding	
-	cwtmatr_yflip = np.apply_along_axis(remove_reflect, 1, cwtmatr_yflip)
+	cwtmatr_yflip = np.apply_along_axis(remove_extend, 1, cwtmatr_yflip)
 
 	interpolation = "antialiased"#"none"
 	#axs[2].imshow(cwtmatr_yflip, vmax = abs(cwtmatr).max(), vmin = -abs(cwtmatr).max(), aspect="auto", interpolation=interpolation)
@@ -1013,7 +1141,7 @@ def wavelet_transform(timevec, data, gaps, onsets, durations, metric, out):
 	
 	pos = axs[2].pcolormesh(timevec, np.round(periods/60/60, decimals=0), cwtmatr_yflip)#, norm=matplotlib.colors.LogNorm(vmin=cwtmatr_yflip.min(), vmax=cwtmatr_yflip.max()))	
 
-	cbar = fig.colorbar(pos, ax=axs[2], label="Magnitude$^2$", location="bottom", shrink=0.6)
+	cbar = fig.colorbar(pos, ax=axs[2], label="Magnitude$^2$")#location="bottom", shrink=0.6)
 	"""	
 	yticks = ax.get_yticks()
 	yticks = yticks[yticks>=0]
@@ -1021,8 +1149,8 @@ def wavelet_transform(timevec, data, gaps, onsets, durations, metric, out):
 	axs[1].set_yticks(ticks = yticks, labels=periods[np.int32(yticks)])
 	"""
 	#axs[2].set_yticks(ticks=range(0, len(cwtmatr)), labels=np.floor(periods/60/60))
-	axs[2].set_ylabel("Period (h)")
-	axs[2].set_title("Continuous Wavelet Transform Time-Frequency Plot", loc="right")
+	axs[2].set_ylabel("Period (log(h))")
+	axs[2].set_title("Continuous Wavelet Transform Time-Frequency Plot")
 
 	lowcut=1/(33*60*60)
 	highcut=1/(21*60*60) 
@@ -1059,17 +1187,16 @@ def wavelet_transform(timevec, data, gaps, onsets, durations, metric, out):
 		#	ax.axvspan(onset, onset + datetime.timedelta(seconds=duration), color="r", alpha=0.5)
 
 
-	fig.supxlabel("Time (d/m h:m:s)")
+	axs[2].set_yscale("log")
+	axs[2].set_xticklabels(axs[2].get_xticklabels(), rotation=15, ha="right")
+	axs[2].set_xlabel("Time (d/m h:m:s)")
 	fig.savefig(os.path.join(out, "components_plots", f"{metric}_CWT"))
-	#fig.show()	
-
-
-
+	plt.close(fig)	
 
 
 	
 	peaks_powers = {}  # dict of peak period -> power
-	fig, ax = plt.subplots()
+	fig, ax = plt.subplots(figsize=(7, 5))
 	
 	# terrence and compo
 	#wavelet_power_spectum = np.power(cwtmatr_yflip, 2) # pg 65, 3d. NOTE cwtmatr_yflip should be defined as np.abs(cwtmatr_yflip) for this to make sense
@@ -1077,18 +1204,22 @@ def wavelet_transform(timevec, data, gaps, onsets, durations, metric, out):
 	global_wavelet_power_spectrum = np.mean(cwtmatr_yflip, axis = 1)
 	global_wavelet_power_spectrum_total = np.sum(global_wavelet_power_spectrum)
 
-	ax.stem(periods/60/60, global_wavelet_power_spectrum)
+	ax.stem(periods/60/60, global_wavelet_power_spectrum, linefmt="black")
 
-	for peak in signal.find_peaks(global_wavelet_power_spectrum)[0]:
+	for peak in signal.find_peaks(global_wavelet_power_spectrum, prominence=100)[0]:
 		# if power of peak contributes more than 1% of total power
 		#if ((global_wavelet_power_spectrum[peak] / global_wavelet_power_spectrum_total) * 100) > 1:
 		period = periods[peak]/60/60
 		power = global_wavelet_power_spectrum[peak]
 		ax.scatter(period, power, c="r", zorder=4)
+		#ax.text(period-2, power + ((ax.get_ylim())[1]*0.05), f"{np.round(period, 2)}h", rotation=90, color="r", weight="bold")
+		#ax.text(period + np.log(period), power, f"{np.round(period, 2)}h", rotation=0, color="r", weight="bold")
+		ax.text(period, -((ax.get_ylim())[1]*0.03), f"{np.int32(np.round(period, 0))}h", rotation=0, color="r", weight="bold", ha="center", va="center")
 		peaks_powers[period] = power
 
-	ax.set_ylabel("Global Wavelet Power (metric$^2$)")
-	ax.set_xlabel("Period (h)")
+	ax.set_ylabel("Mean Wavelet Power (Magnitude$^2$)")
+	ax.set_xscale("log")
+	ax.set_xlabel("Period (log(h))")
 	ax.set_title("Global Wavelet Power Spectrum")	
 
 	"""
@@ -1097,8 +1228,7 @@ def wavelet_transform(timevec, data, gaps, onsets, durations, metric, out):
 	"""
 	
 	fig.savefig(os.path.join(out, "components_plots", f"{metric}_CWT_power_spectrum"))
-
-	print("")
+	plt.close(fig)
 
 	return peaks_powers
 
@@ -1115,11 +1245,20 @@ def rhythm_chirp(timevec, hours0, t1, hours1, A=10, phi=0, method="linear"):
 	# phi = phase - where, in radians, the cycle is at t=0
 	return A * signal.chirp(timevec, f0=1/(hours0*60*60), t1 = t1, f1=1/(hours1*60*60), method=method, phi=phi)
 
+
+def rhythm_square(timevec, hours, A=10, phi=0):
+	# convolved square wave rhythm
+	
+	rhythm = signal.square(2*np.pi*(1/(hours))*((timevec/60/60) + phi)) # TODO is phi right here?
+
+	return rhythm * A
+
 def rhythm_square_conv(timevec, hours, A=10, phi=0):
 	# convolved square wave rhythm
 	
 	rhythm = signal.square(2*np.pi*(1/(hours))*((timevec/60/60) + phi)) # TODO is phi right here?
-	rhythm = np.convolve(rhythm, np.hanning(75), "same") # smooth transitions
+	#rhythm = np.convolve(rhythm, np.hanning(75), "same") # smooth transitions
+	rhythm = np.convolve(rhythm, np.bartlett(25), "same") # smooth transitions
 	rhythm = stats.zscore((rhythm - np.mean(rhythm))) * A # re-center and set to desired amplitude
 
 	return rhythm
@@ -1129,7 +1268,7 @@ def rhythm_square_conv(timevec, hours, A=10, phi=0):
 def simulated_subject(code):
 	
 	segment_len_s = 300
-	n_days = 3 # similar length to 909
+	n_days = 7 # similar length to 909
 	n_segments = (n_days * (24*60))/5 # how many segments of len segment_len_s?
 	data_length = n_segments * segment_len_s # this is so we can use the same sample rates
 	timevec = np.arange(0, data_length, segment_len_s)
@@ -1139,10 +1278,125 @@ def simulated_subject(code):
 	data = np.zeros(len(timevec))
 
 
+	rng = np.random.default_rng(1906)
 
 	if code == "A":
 		data +=  rhythm_square_conv(timevec, hours=24, A=10, phi=0)
 		contains = {24:10}
+	
+	elif code == "new":
+		
+
+		"""
+		contains = {
+			50.0: 6,
+			48.0: 4, 
+			24.0: 10, 
+			19.0: 5, 
+			13.0: 6, 
+			9.0: 3, 
+			6.5: 2, 
+			5.0: 2, 
+			4.0: 3, 
+			3.2: 2, 
+			2.5: 8,
+			2.0: 4,
+			1.5: 3,
+			1.0: 8,
+			0.5: 5}
+		"""		
+
+
+		"""
+		contains = {
+			50.0: 6,
+			40.0: 7,
+			24.0: 10, 
+			19.0: 5, 
+			13.0: 6, 
+			9.0: 4, 
+			6.5: 8, 
+			5.0: 4,}
+		
+			3.5: 4, 
+			2.0: 4,
+			1.0: 7,
+			0.5: 4}
+		"""
+		
+
+		"""
+		contains = {
+			168: 10,
+			24: 10,
+			19: 8,
+			14: 9,
+			10:7,
+			7:8,
+			3.7:6,
+			}
+		"""
+		contains = {
+			24: 10,
+			}
+
+
+
+		fig, ax = plt.subplots(len(contains.keys())+2, 1)
+		pntr = len(contains.keys())+1	
+
+		for period, amplitude in contains.items(): 
+			if period == 24:
+				component = rhythm_square(timevec, hours=24, A=amplitude, phi=0)
+			else:
+				#continue
+				component = rhythm(timevec, hours=period, A = amplitude, phi=rng.choice(np.arange(0, 2*np.pi, 0.1)))
+			data += component
+			contains[period] = amplitude	
+			ax[pntr].plot(component)
+			pntr -= 1
+
+		spikes = np.zeros(len(data))
+		spike_height = 80
+		spikes[rng.choice(np.arange(0, len(data)), 3)] = spike_height
+		data += spikes
+
+		#ax[0].plot(data, c="black")
+
+
+	elif code == "909_repro":
+
+		rng = np.random.default_rng(1906)
+
+		repro_dict = {48.0: 4.389601505990354, 24.0: 8.039840623616088, 16.0: 3.7387045650972954, 12.0: 5.881117200600107, 9.600000000000001: 3.5726649952917997, 6.0: 2.2268738774852572, 5.333333333333334: 2.246636380766623, 4.800000000000001: 3.3526555907981552, 4.363636363636364: 1.859224807179114, 3.4285714285714284: 2.1669521632642277, 3.2: 2.22018201747702, 3.0: 2.3274646746726844}
+
+		fig, ax = plt.subplots(len(repro_dict.keys())+1, 1)
+		pntr = len(repro_dict.keys())	
+
+
+		contains = {}
+		#for period, proportion in repro_dict.items():
+			#power =  (A*proportion)
+			#data += rhythm(timevec, hours=period, A = power, phi=0)
+			#contains[period] = power	
+		for period, amplitude in repro_dict.items(): 
+			if period == 24:
+				component = rhythm_square(timevec, hours=24, A=amplitude, phi=0)
+			else:
+				#continue
+				component = rhythm(timevec, hours=period, A = amplitude, phi=rng.choice(np.arange(0, 2*np.pi, 0.1)))
+			data += component
+			contains[period] = amplitude	
+			ax[pntr].plot(component)
+			pntr -= 1
+
+		spikes = np.zeros(len(data))
+		spike_height = 80
+		spikes[rng.choice(np.arange(0, len(data)), 3)] = spike_height
+		data += spikes
+
+		ax[0].plot(data, c="black")
+		plt.close(fig)
 	
 	elif code == "slides":
 		fig, ax = plt.subplots(3)
@@ -1222,8 +1476,18 @@ def simulated_subject(code):
 
 	data += baseline
 	
-	noise = 6* np.random.normal(0, 1, len(timevec))
+	noise_amp = 3
+	noise = noise_amp* rng.normal(0, 1, len(timevec))
+	#set_random_seed(1905) # neurodsp seed
+	exponent = -2  # -2 for brown noise
+	#noise = sim_powerlaw(n_seconds=data_length, fs=1/segment_len_s, exponent= exponent)
+	noise = noise * noise_amp
 	noisy_data = data + noise
+	
+	
+	ax[0].plot(noisy_data, c="black")
+	ax[1].plot(noise)
+	plt.close(fig)
 	
 	return contains, data, noisy_data
 
@@ -1248,7 +1512,7 @@ def temp_plot(subjects_methods_peaks, metric, now):
 	axes  = []
 	for i in range(0, len(methods)):
 		#fig, ax = plt.subplots(figsize=(19.20, 19.20))
-		fig, ax = plt.subplots(figsize=(7.20, 7.20))
+		fig, ax = plt.subplots(figsize=(10.8, 10.8))
 		figures.append(fig)
 		axes.append(ax)	
 
@@ -1274,14 +1538,31 @@ def temp_plot(subjects_methods_peaks, metric, now):
 	# A: per-subject, per-method peaks power plot, 
 	# B: all subjects, per-method scatter plot
 
+	xticks = np.array([1, 2, 3, 4, 5, 10, 15, 20, 30, 40, 60, 80, 100, 150, 200, 250], dtype=np.int32)
+
+
 	for subject in pd.unique(subjects_methods_peaks_df["subject"]):
+
+		if "taVNS" in subject:
+			A_title = f"taVNS Subject {subject.split('taVNS')[1]}"
+		elif "sim" in subject:
+			A_title = f"Simulated Subject {subject}"
+		else:
+			A_title = f"UCLH Subject {subject}"
+
+		A_title = f"{A_title} ({metric_fullname(metric)})"
 
 		# A
 		fig_pp, ax_pp = plt.subplots(figsize=(10.80, 10.80))
+		#ax_pp.set_xlabel("Period (log(h))")
 		ax_pp.set_xlabel("Period (h)")
-		#ax_pp.set_ylabel("Method")
-		#ax_pp.set_xscale("log")
+		ax_pp.set_ylabel("Signal Decomposition Method")
 		
+		ultradian_span = ax_pp.axvspan(ULTRADIAN_MIN, ULTRADIAN_MAX, color=ULTRADIAN_COLOR)
+		circadian_span = ax_pp.axvspan(CIRCADIAN_MIN, CIRCADIAN_MAX, color=CIRCADIAN_COLOR)
+		infradian_span = ax_pp.axvspan(INFRADIAN_MIN, INFRADIAN_MAX, color=INFRADIAN_COLOR)
+		fig_pp.legend([ultradian_span, circadian_span, infradian_span], [f"Ultradian ({ULTRADIAN_MIN}h-{ULTRADIAN_MAX}h)", f"Circadian ({CIRCADIAN_MIN}h-{CIRCADIAN_MAX}h)", f"Infradian ({INFRADIAN_MIN}h-$\infty$h)"], loc="upper left")		
+
 		"""	
 		for method, peaks_power in subjects_methods_peaks[subject].items():
 
@@ -1315,8 +1596,9 @@ def temp_plot(subjects_methods_peaks, metric, now):
 		"""
 
 		# A 
-		sns.scatterplot(data=subjects_methods_peaks_df[subjects_methods_peaks_df["subject"] == subject], y="method", x="cycle_period", size="power", sizes=(10, 300), zorder=4, ax=ax_pp)
-
+		#sns.scatterplot(data=subjects_methods_peaks_df[subjects_methods_peaks_df["subject"] == subject], y="method", x="cycle_period", hue="power", palette=pal, sizes=(10, 300), zorder=4, ax=ax_pp, legend=False)
+		sns.scatterplot(data=subjects_methods_peaks_df[subjects_methods_peaks_df["subject"] == subject].dropna(axis=0), y="method", x="cycle_period", c="black", zorder=4, ax=ax_pp, legend=False)
+		
 		"""
 		extra_periods = [2, 12,]
 		xt = ax_pp.get_xticks()
@@ -1324,22 +1606,32 @@ def temp_plot(subjects_methods_peaks, metric, now):
 			xt = np.append(xt, period)
 		ax_pp.set_xticks(xt)		
 		"""
-		harmonics = [(1/(n*(1.15e-5)))/60/60 for n in np.concatenate(([0.5], np.arange(1, 20)))]
+		harmonics = [(1/(n*(1.15e-5)))/60/60 for n in np.concatenate(([0.25, 0.5], np.arange(1, 20)))]
 		for i, harmonic in enumerate(harmonics):
 			col="grey"
-			alph = max(0, (1 - (0.1* np.abs(1-i)))) # decrease alpha of harmonic by 0.1 based on how far it is from central 24h frequency
+			decr = 0.05
+			alph = max(0, (1 - (decr* np.abs(1-i)))) # decrease alpha of harmonic by decr based on how far it is from central 24h frequency
 			ax_pp.axvline(harmonic, c=col, alpha=alph, zorder=3.5)
 			ax_pp.text(harmonic, -0.75, f"{np.round(harmonic, decimals=2)}h", c=col, alpha=alph, rotation=90)
 
+		ax_pp.set_xscale("log")
+		#ax_pp.autoscale(enable=True, axis='x', tight=True)
+		ax_pp.set_xticks(ticks=xticks, labels=xticks)
 		#ax_pp.set_yticks(ticks=np.array(list(methods_y_mapping.values())), labels=methods_y_mapping.keys())
+		ax_pp.set_xlim([0.8, INFRADIAN_MAX])
+		fig_pp.suptitle(A_title)
 		fig_pp.savefig(os.path.join(plots_dir, f"{subject}_peaks"))
-	
+		plt.close(fig_pp)
 
 	# B 
 	for method in methods:	
 		ax = axes[np.where(np.array(list(methods)) == method)[0][0]]
-		#ax.axhline(subject_y_mapping[subject], c="silver", alpha=0.5)
-		sns.scatterplot(data=subjects_methods_peaks_df[subjects_methods_peaks_df["method"] == method], y="subject", x="cycle_period", hue="power", palette=pal, edgecolor="black", zorder=4, ax=ax)
+
+		#sns.scatterplot(data=subjects_methods_peaks_df[subjects_methods_peaks_df["method"] == method], y="subject", x="cycle_period", hue="power", palette=pal, edgecolor="black", zorder=4, ax=ax)
+		
+		points = subjects_methods_peaks_df[subjects_methods_peaks_df["method"] == method]
+
+
 		for y in ax.get_yticks():
 			ax.axhline(y, c="silver", alpha=0.5, zorder=3.5)
 
@@ -1353,20 +1645,25 @@ def temp_plot(subjects_methods_peaks, metric, now):
 
 		axes[i].legend([],[], frameon=False)
 
-		axes[i].set_title(method)
+		axes[i].set_title(f"{method_fullname(method)} ({metric_fullname(metric)})")
 
+		#axes[i].set_xlabel("Period (log(h))")
 		axes[i].set_xlabel("Period (h)")
 		
 		axes[i].set_ylabel("Subject")
 
-		axes[i].axvspan(0, 20, color="#DED5E8")
-		axes[i].axvspan(20, 28, color="#CCE5D7")
-		axes[i].axvspan(28, 50, color="#EED8CD")
+		axes[i].axvspan(ULTRADIAN_MIN, ULTRADIAN_MAX, color=ULTRADIAN_COLOR)
+		axes[i].axvspan(CIRCADIAN_MIN, CIRCADIAN_MAX, color=CIRCADIAN_COLOR)
+		axes[i].axvspan(INFRADIAN_MIN, INFRADIAN_MAX, color=INFRADIAN_COLOR)
+		figures[i].legend([ultradian_span, circadian_span, infradian_span], [f"Ultradian ({ULTRADIAN_MIN}h-{ULTRADIAN_MAX}h)", f"Circadian ({CIRCADIAN_MIN}h-{CIRCADIAN_MAX}h)", f"Infradian ({INFRADIAN_MIN}h-$\infty$h)"], loc="upper left")		
 
-		axes[i].set_xlim([0, 50])
+		axes[i].set_xlim([0.8, INFRADIAN_MAX])
+		axes[i].set_xscale("log")
+		axes[i].set_xticks(ticks=xticks, labels=xticks)
 		#axes[i].autoscale(enable=True, axis='x', tight=True)
 
 		figures[i].savefig(os.path.join(plots_dir, f"{method}_subjects"))
+		plt.close(figures[i])
 
 	return subjects_methods_peaks_df
 
@@ -1380,7 +1677,8 @@ if __name__ == "__main__":
 
 	subjects = UCLH_subjects + taVNS_subjects
 	
-	#subjects = ["sim"]
+	subjects = ["sim"]
+	
 	#subjects = ["1167"]
 	#subjects = ["1200"]
 	#subjects=["909"]
@@ -1388,11 +1686,14 @@ if __name__ == "__main__":
 	#subjects =["taVNS001"]
 	#subjects= ["1284"]
 	#subjects = ["1119"]
+	#subjects = ["815"]
 
-	subjects = ["1167", "1200", "909", "1284", "1119", "taVNS001", "taVNS006"]
+	#subjects = ["815", "1167", "1200", "909", "1284", "1119", "taVNS001", "taVNS006"]
+	#subjects = ["909", "taVNS001"]
 
 	#metrics = ["hr_mean", "fft_ratio", 'sdnn', 'rmssd', 'sdsd', 'nn50', 'pnn50', 'nn20', 'pnn20', 'tri_index', "fft_rel_VLF", "fft_rel_LF", "fft_rel_HF"]
 	metrics = ["hr_mean"] 
+
 
 	start = time.time()	
 	now = datetime.datetime.now()
@@ -1471,11 +1772,53 @@ if __name__ == "__main__":
 
 					# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
 					interpolated, timevec, gaps = interpolate_gaps(data, timevec, ax, out, metric) 
+				
+					fig.supylabel("bpm")	
+					fig.savefig(os.path.join(out, "preprocessing_plots", f"{metric}_preprocessing"))
+					plt.close(fig)
 
-					fig.savefig(os.path.join(out, f"{metric}_preprocessing"))
+					# # # #
+
+					ax2_xticks = 1/(np.arange(1, 48)*60*60)
+					ax2_xticks = np.concatenate(([0], ax2_xticks)) 
+					ax2_xticklabels = (1/ax2_xticks) # invert to frequency is period (s)
+					ax2_xticklabels = (ax2_xticklabels / 60) / 60 # get from s into hours 
+					ax2_xticklabels = [np.round(lab, decimals=1) if lab != np.inf else lab for lab in ax2_xticklabels]
+
+					f, Pxx_den = psd(interpolated, 1/300)
+					fig, ax = plt.subplots()
+					ax.stem(f, Pxx_den)
+					ax.set_xticks(ticks=ax2_xticks, labels=ax2_xticklabels)
+					#fig.show()
 					
-					print("REMOVE ME EARLY REFLECT")
-					extend(interpolated, out, metric)
+					max_power = max(Pxx_den)
+					repro_dict = {}
+					for hz, power in dict(zip(f, Pxx_den)).items():
+						period = 1/(hz*60*60)
+					
+
+						#proportion = power/max_power 
+						proportion = power/np.sum(Pxx_den)
+
+	
+						# what % of the maximum power is this power?
+						pct = np.round((proportion * 100), 2)
+					
+						if pct > 1: # keep only those above 1%
+							print(f"{np.round(period, 2)}h\t:\t{pct}% ")
+							#repro_dict[period] = proportion
+
+							amplitude =np.sqrt(power) / len(Pxx_den) # I guess this is like average of amplitude over duration of signal? 
+							repro_dict[period] = amplitude
+
+
+					print(repro_dict)
+					print(np.sum(Pxx_den))
+
+					plt.close(fig)
+					
+					# # # #
+
 
 					# perform multi-resolution analysis (signal decomposition)	
 					methods_peaks = mra(out, metric, timevec, interpolated, gaps, onsets, durations, sharey=False)	
@@ -1517,13 +1860,16 @@ if __name__ == "__main__":
 
 		simulated_subjects_peaks = {}
 		
-		letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
-		sim_fig, sim_ax = plt.subplots(len(letters), 2, figsize=(19.20, 10.80))
+		#letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
+		#letters = ["909_repro"]
+		letters = ["new"]
+		sim_fig, sim_ax = plt.subplots(max(2, len(letters)), 2, figsize=(19.20, 10.80))
 
 		for i, letter in enumerate(letters):
 			
 			contains, noisefree_data, noisy_data = simulated_subject(letter)		
 			
+
 			sim_ax[i, 0].plot(noisefree_data)
 			sim_ax[i, 0].set_title(f"{letter}")
 			sim_ax[i, 1].plot(noisy_data)
@@ -1542,22 +1888,45 @@ if __name__ == "__main__":
 				data[rng.choice(len(data), math.floor(len(data) * 0.1))] = np.NaN # smaller gaps randomly throughout
 
 				timevec = [datetime.datetime.fromtimestamp(0) + datetime.timedelta(seconds=(i * 300)) for i in range(0, len(data))]
+				
+				fig, ax = plt.subplots()
+				ax.plot(timevec, data, color="black")
+				ax.set_ylabel("Mean Heart Rate per 5 minute segment (bpm)")
+				ax.set_xlabel("Time (d/m h:m:s)")
+				fig.suptitle("Simulated Heart Rate Data (with missing data, prior to preprocessing)")
+				fig.savefig(os.path.join(out, "preprocessing_plots", f"{metric}_viz"))
 
 				onsets = durations = []
 			
 				fig, ax = plt.subplots(6, figsize=(10.8, 10.8))
 				plt.subplots_adjust(bottom = 0.05, top=0.93, hspace=0.75)
 				fig.suptitle("Data Preprocessing Steps")
-				ax[0].plot(timevec_old, data, c="black")
+				ax[0].plot(timevec, data, c="black")
 				ax[0].set_title("Original Data", loc="left")
 				ax[0].set_xlim([min(timevec), max(timevec)]) 
 
 				# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
 				interpolated, timevec, gaps = interpolate_gaps(data, timevec, ax, out, metric) 
-
-				fig.savefig(os.path.join(out, f"{metric}_preprocessing"))
-
 				
+				fig.savefig(os.path.join(out, "preprocessing_plots", f"{metric}_preprocessing"))
+				plt.close(fig)
+				
+				# # # #	
+				ax2_xticks = 1/(np.arange(1, 48)*60*60)
+				ax2_xticks = np.concatenate(([0], ax2_xticks)) 
+				ax2_xticklabels = (1/ax2_xticks) # invert to frequency is period (s)
+				ax2_xticklabels = (ax2_xticklabels / 60) / 60 # get from s into hours 
+				ax2_xticklabels = [np.round(lab, decimals=1) if lab != np.inf else lab for lab in ax2_xticklabels]
+
+				f, Pxx_den = psd(interpolated, 1/300)
+				fig, ax = plt.subplots()
+				ax.stem(f, Pxx_den)
+				ax.set_xticks(ticks=ax2_xticks, labels=ax2_xticklabels)
+				#fig.show()
+				# # # #				
+
+
+
 				methods_peaks = mra(out, metric, timevec, interpolated, gaps, onsets, durations, sharey=False)
 				subjects_methods_peaks[letter+suffix] = methods_peaks
 
@@ -1570,6 +1939,11 @@ if __name__ == "__main__":
 			for cycle_period, amplitude in contains.items():
 				simulated_subjects_peaks_df = pd.concat([simulated_subjects_peaks_df, pd.DataFrame([{"subject":simulated_subject, "cycle_period": cycle_period, "amplitude": amplitude}])], ignore_index=True)				
 
+		# set up dir (COPIED FROM temp_plot)
+		logfile_dir = constants.SUBJECT_DATA_OUT.format(subject='LOGS')		
+		plots_subdir = f"{now.day}_{now.month}_{now.year}_{now.hour}_{now.minute}_{now.second}_{metric}_sim"	
+		plots_dir = os.path.join(logfile_dir, "PLOTS", plots_subdir)
+		os.makedirs(plots_dir, exist_ok=True)
 
 		# plotting
 		subjects_methods_peaks_df = temp_plot(subjects_methods_peaks, metric+"_sim", now)
@@ -1586,14 +1960,107 @@ if __name__ == "__main__":
 			# we have info on amplitude
 			# TODO how will significant peak filtering come into this?
 
+
+		VALID_COLOR = "green"
+		INVALID_COLOR = "red"
+		HARMONIC_COLOR = "grey"
+		VALID_HANDLE = None
+		INVALID_HANDLE = None
+		HARMONIC_HANDLE = None
+
+	
 		for simulated_subject in simulated_subjects:
 			
+			DP = 1 
+
+			fig, ax = plt.subplots(len(methods)+1, 1, figsize=(10.8, 10.8), sharex=True)
+			plt.subplots_adjust(bottom=0.05, top=0.957, hspace=0.402)
+			j = 0			
+			
 			simulated_subject_contains = simulated_subjects_peaks_df[simulated_subjects_peaks_df["subject"] == simulated_subject]				
+			actual_periods = np.array(simulated_subject_contains["cycle_period"].values, dtype=np.float32)
+		
+			barwidth = 10
+	
+			max_actual = max(simulated_subject_contains["cycle_period"].values)
+			#sns.barplot(data=simulated_subject_contains, x="cycle_period", y="amplitude", ax=ax[j])
+			VALID_HANDLE = ax[j].bar(actual_periods, simulated_subject_contains["amplitude"], color=VALID_COLOR, zorder=2.5)
+			
+			ax[j].set_ylabel("Amplitude")
+			ax[j].set_title("Simulated Data Specification")
+			
+			harmonics = simulated_subject_contains[simulated_subject_contains["cycle_period"].astype(float).round(DP).isin(np.unique(np.round(HARMONICS_24H, DP)))]
+			ax[j].bar(harmonics["cycle_period"], harmonics["amplitude"], color=HARMONIC_COLOR, zorder=2.55)
+
+			ax[j].axvspan(ULTRADIAN_MIN, ULTRADIAN_MAX, color=ULTRADIAN_COLOR)
+			ax[j].axvspan(CIRCADIAN_MIN, CIRCADIAN_MAX, color=CIRCADIAN_COLOR)
+			ax[j].axvspan(INFRADIAN_MIN, INFRADIAN_MAX, color=INFRADIAN_COLOR)
+			#ax[j].autoscale(enable=True, axis='x', tight=True)
+			ax[j].set_xlim([0, max_actual+10])
+			#ax[j].set_xscale("log")
+			#ax[j].set_xticks(ticks = actual_periods, labels = actual_periods)		
+	
+			evaluation_df = pd.DataFrame(columns=["method", "tp", "fp", "fn", "sensitivity", "accuracy"])
 			
 			for method in methods:
 
 				peaks_power_df = subjects_methods_peaks_df[(subjects_methods_peaks_df["subject"] == simulated_subject) & (subjects_methods_peaks_df["method"] == method)]
 				
+				peaks_power_df =  peaks_power_df.dropna(axis=0)
+
+
+
+
+				j += 1
+				#sns.barplot(data=peaks_power_df.dropna(axis=0), x="cycle_period", y="power", ax=ax[j])
+				INVALID_HANDLE = ax[j].bar(peaks_power_df["cycle_period"], np.sqrt(peaks_power_df["power"]), color=INVALID_COLOR, zorder=2.5)
+			
+				# class as correct if in actual data when rounded to N dp
+				#correct = peaks_power_df[peaks_power_df["cycle_period"].astype(float).round(DP).isin(simulated_subject_contains["cycle_period"].astype(float).round(DP))]
+				
+				# class as correct if within N difference in period from rhythm in actual data
+				correct = peaks_power_df.copy()	
+				diff_to_actuals = []			
+				for idx in correct.index:
+					condition_met = False
+					
+					extracted = correct.loc[idx]["cycle_period"]
+					if not np.round(extracted, DP) in np.unique(np.round(HARMONICS_24H, DP)):
+						diff_to_actual = np.inf
+
+
+						for actual in simulated_subject_contains["cycle_period"]:
+							diff = np.abs(extracted-actual)
+							if diff <= 0.17:
+								condition_met = True
+								if diff < diff_to_actual: 
+									diff_to_actual = diff
+
+					if not condition_met:
+						correct = correct.drop(idx)			
+					else:
+						diff_to_actuals.append(diff_to_actual)
+
+				ax[j].bar(correct["cycle_period"], np.sqrt(correct["power"]), color=VALID_COLOR, zorder=2.55)
+			
+				harmonics = peaks_power_df[peaks_power_df["cycle_period"].astype(float).round(DP).isin(np.unique(np.round(HARMONICS_24H, DP)))]
+				HARMONIC_HANDLE = ax[j].bar(harmonics["cycle_period"], np.sqrt(harmonics["power"]), color=HARMONIC_COLOR, zorder=2.55)
+				
+				
+				ax[j].set_ylabel(r"$\sqrt{Power}$") #TODO is this ylabel correct
+				#ylim_min, ylim_max = ax[j].get_ylim()
+				#ax[j].yaxis.set_label_coords(0, np.median([ylim_min, ylim_max]))
+				
+				if j == len(methods)+1: ax[j].set_xlabel("Cycle Period")
+				ax[j].set_title(method)
+	
+				ax[j].axvspan(ULTRADIAN_MIN, ULTRADIAN_MAX, color=ULTRADIAN_COLOR)
+				ax[j].axvspan(CIRCADIAN_MIN, CIRCADIAN_MAX, color=CIRCADIAN_COLOR)
+				ax[j].axvspan(INFRADIAN_MIN, INFRADIAN_MAX, color=INFRADIAN_COLOR)	
+				ax[j].set_xlim([0, max_actual+10])
+				#ax[j].set_xscale("log")
+				#ax[j].set_xticks(ticks = actual_periods, labels = actual_periods)		
+
 				# A. 		
 				n_comp_actual = simulated_subject_contains.shape[0]
 				comp_detected = peaks_power_df[~pd.isnull(peaks_power_df["power"])]
@@ -1602,27 +2069,62 @@ if __name__ == "__main__":
 				correct_n_comp_df.loc[simulated_subject][method] = n_comp_difference
 
 				# B
-				common_cycle_periods = set(np.round(simulated_subject_contains["cycle_period"].to_numpy(dtype=np.float64))).intersection(set(np.round(comp_detected["cycle_period"].to_numpy(dtype=np.float64))))
+				#common_cycle_periods = set(np.round(simulated_subject_contains["cycle_period"].to_numpy(dtype=np.float64), DP)).intersection(set(np.round(comp_detected["cycle_period"].to_numpy(dtype=np.float64), DP)))
+				common_cycle_periods = correct["cycle_period"]
 				pct_actual_detected = np.round(len(common_cycle_periods) / n_comp_actual * 100, decimals=2)
 				correct_comp_periods_df.loc[simulated_subject][method] = pct_actual_detected
-				
-		
-		
+			
+				n_true_positives  = 0 # how many cycles that we know were present were found?
+				n_false_positives = 0 # how many cycles were found that we know were not present?
+				n_false_negatives = 0 # how many cycles that we know were present weren't found?
+				"""
+				for cycle in comp_detected["cycle_period"].astype(float).round(DP).values:	
+					if cycle in simulated_subject_contains["cycle_period"].astype(float).round(DP).values:
+						n_true_positives += 1
+					else:
+						n_false_positives += 1
 
+				for cycle in simulated_subject_contains["cycle_period"].astype(float).round(DP).values:
+					if cycle not in comp_detected["cycle_period"].astype(float).round(DP).values:
+						n_false_negatives += 1
+				"""
+				for cycle in comp_detected["cycle_period"].astype(float).round(DP).values:	
+					if (cycle in common_cycle_periods.astype(float).round(DP).values):# and (np.round(cycle, DP) not in np.unique(np.round(HARMONICS_24H, DP))):
+						n_true_positives += 1
+
+					else:
+						n_false_positives += 1
+
+				for cycle in simulated_subject_contains["cycle_period"].astype(float).round(DP).values:
+					if cycle not in common_cycle_periods.astype(float).round(DP).values:
+						n_false_negatives += 1
+
+				print(method)
+				print(f"TP: {n_true_positives}")
+				print(f"FP: {n_false_positives}")
+				print(f"FN: {n_false_negatives}")
+			
+				sensitivity = n_true_positives / (n_true_positives + n_false_negatives)
+				accuracy = np.mean(diff_to_actuals)	
+				
+				evaluation_df_entry = {"method":method, "tp":n_true_positives, "fp":n_false_positives, "fn":n_false_negatives, "sensitivity":sensitivity, "accuracy":accuracy}	
+				evaluation_df.loc[len(evaluation_df)] = evaluation_df_entry
+
+			fig.legend([VALID_HANDLE, INVALID_HANDLE, HARMONIC_HANDLE], ["True Positives", "False Positives", "Probable Harmonics"], loc="center right")
+			fig.supxlabel("Period (h)")
+			plt.subplots_adjust(hspace=0.529)
+			fig.savefig(os.path.join(plots_dir, f"{simulated_subject}_bars"))
+			evaluation_df.to_csv(os.path.join(plots_dir, f"sim{simulated_subject}_evaluation.csv"), index=False)		
 
 		import matplotlib.cm as cm
 		import matplotlib.colors as mcolors		
 				
-		# set up dir (COPIED FROM temp_plot)
-		logfile_dir = constants.SUBJECT_DATA_OUT.format(subject='LOGS')		
-		plots_subdir = f"{now.day}_{now.month}_{now.year}_{now.hour}_{now.minute}_{now.second}_{metric}_sim"	
-		plots_dir = os.path.join(logfile_dir, "PLOTS", plots_subdir)
-		os.makedirs(plots_dir, exist_ok=True)
 
 
 		# visualise sim result dfs
 		# A.
 		correct_n_comp_df = correct_n_comp_df.astype(np.int32)
+		"""
 		fig, ax = plt.subplots(figsize=(10.80, 10.80))
 		
 		vcenter = 0
@@ -1636,11 +2138,6 @@ if __name__ == "__main__":
 		ax.set_ylabel("Simulated Subject")
 		ax.set_xlabel("Method")
 
-		"""
-		scalarmappaple = cm.ScalarMappable(norm=normalize, cmap=colormap)
-		scalarmappaple.set_array(y)
-		fig.colorbar(scalarmappaple)
-		"""
 
 		ax_r = ax.secondary_yaxis("right")
 		ax_r.set_yticks(ax.get_yticks())
@@ -1651,11 +2148,13 @@ if __name__ == "__main__":
 		ax_t.set_xticklabels(correct_n_comp_df.mean(axis=0))
 		
 		fig.savefig(os.path.join(plots_dir, "correct_n_comp"))	
-		
+		plt.close(fig)
+		"""
 		# B.
 		correct_comp_periods_df = correct_comp_periods_df.astype(np.float64)
 		fig, ax = plt.subplots(figsize=(10.80, 10.80))
-		sns.heatmap(data=correct_comp_periods_df, annot=False, cbar=True, cmap="mako", cbar_kws={"label": "% of Actual Components Detected"}, ax=ax)
+		normalize = mcolors.TwoSlopeNorm(vcenter=50, vmin=0, vmax=100)
+		sns.heatmap(data=correct_comp_periods_df, annot=False, cbar=True, norm=normalize, cmap="mako", cbar_kws={"label": "% of Actual Components Detected"}, ax=ax)
 		ax.set_ylabel("Simulated Subject")
 		ax.set_xlabel("Method")
 		
@@ -1668,4 +2167,6 @@ if __name__ == "__main__":
 		ax_t.set_xticks(ax.get_xticks())
 		ax_t.set_xticklabels([f"{val}%" for val in np.round(correct_comp_periods_df.mean(axis=0), decimals=0)])
 
-		fig.savefig(os.path.join(plots_dir, "correct_comp_periods"))	
+		fig.savefig(os.path.join(plots_dir, "correct_comp_periods"))
+		plt.close(fig)
+

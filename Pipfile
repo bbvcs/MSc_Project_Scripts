@@ -20,6 +20,10 @@ pywavelets = "*"
 emd-signal = "*"
 openpyxl = "*"
 pyts = "*"
+sklearn = "*"
+statsmodels = "*"
+kneed = "*"
+neurodsp = "*"
 
 [dev-packages]
 
