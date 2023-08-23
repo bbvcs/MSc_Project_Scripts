@@ -122,7 +122,8 @@ def components_plot_old(components, original, out, title, gaps, sharey=True):
 
 	x = range(0, len(original))
 	alpha = 0.3 # transparency of the interpolated sections
-	c = "blueviolet" # color of components
+	#c = "blueviolet" # color of components
+	c="black"
 
 	ax[0].plot(x, original, color="black", alpha=alpha)
 	ax[0].plot(x, cut_gaps(original, gaps), color="black")
@@ -171,8 +172,9 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 	x_original = timevec
 	x_imfs = timevec[0: components.shape[1]]
 	alpha = 0.3 # transparency of the interpolated sections
-	c = "blueviolet" # color of components
-	
+	#c = "blueviolet" # color of components
+	c = "black"	
+
 	fs = 1/300 # TODO this needs to be param
 
 	ax2_xticks = np.array([0, 1/(24*60*60), 1/(18*60*60),1/(14*60*60),1/(12*60*60),1/(10*60*60),1/(8*60*60),1/(6*60*60),1/(4*60*60),1/(2*60*60),1/(60*60)])	
@@ -189,7 +191,7 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 	f, Pxx_den = psd(original, fs)
 	original_total_power = np.sum(Pxx_den)
 	ax2[0].plot(f, Pxx_den, alpha=0.25)
-	ax2[0].stem(f, Pxx_den)
+	ax2[0].stem(f, Pxx_den, linefmt = c)
 	#ax2[0].set_xticks(ticks=f, labels=1/f)
 	ax2[0].set_xticks(ticks=ax2_xticks, labels=ax2_xticklabels, rotation=ax2_xticklab_rot)
 	#ax2[0].axvline((1/(24*60*60)), c="r", label="Circadian")
@@ -204,7 +206,7 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 	f, Pxx_den = psd(reconstruction, fs)
 	reconstruction_total_power = np.sum(Pxx_den)
 	ax2[1].plot(f, Pxx_den, alpha=0.25)
-	ax2[1].stem(f, Pxx_den)
+	ax2[1].stem(f, Pxx_den, linefmt=c)
 	#ax2[1].set_xticks(ticks=f, labels=1/f)
 	ax2[1].set_xticks(ticks=ax2_xticks, labels=ax2_xticklabels, rotation=ax2_xticklab_rot)
 	#ax2[1].axvline((1/(24*60*60)), c="r", label="Circadian")
@@ -221,8 +223,8 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 		f, Pxx_den = psd(comp, fs)
 		component_total_power = np.sum(Pxx_den)
 		components_total_powers.append(component_total_power)
-		ax2[i+2].plot(f, Pxx_den, alpha=0.25)
-		ax2[i+2].stem(f, Pxx_den)
+		ax2[i+2].plot(f, Pxx_den, alpha=0.25, c=c)
+		ax2[i+2].stem(f, Pxx_den, linefmt=c)
 		ax2[i+2].set_xticks(ticks=ax2_xticks, labels=ax2_xticklabels, rotation=ax2_xticklab_rot)
 		#ax2[i+2].axvline((1/(24*60*60)), c="r", label="Circadian")
 		ax2[i+2].set_xlim(ax2_xlim)
@@ -315,7 +317,7 @@ def components_plot(timevec, components, original, out, title, gaps, onsets, dur
 			
 
 			ax3.scatter(peak_freq, peak_Pxx, marker="x", c="r", zorder=10)
-			ax2[i+2].stem(peak_freq, peak_Pxx, markerfmt="r")# zorder=10)
+			ax2[i+2].stem(peak_freq, peak_Pxx, linefmt=c, markerfmt="r")# zorder=10)
 			ylim_min, ylim_max = ax2[i+2].get_ylim()
 			ax2[i+2].text(1/(0.98*60*60), np.median([ylim_min,ylim_max]), f"{np.round((1/peak_freq)/60/60, decimals=2)}h", fontsize="x-large")
 		else:
@@ -621,7 +623,9 @@ def interpolate_gaps(data, timevec, ax, out, metric):
 		thresh = len(data) * 0.10
 		for n, island in enumerate(islands):
 			
-			# only consider  
+			# to avoid deleting middle islands and making problem worse, only consider first/last island
+			if n not in [0, len(islands)-1]:
+				continue
 
 			island_length = island[1] - island[0]
 			if island_length < thresh:
@@ -1206,16 +1210,20 @@ def wavelet_transform(timevec, data, gaps, onsets, durations, metric, out):
 
 	ax.stem(periods/60/60, global_wavelet_power_spectrum, linefmt="black")
 
-	for peak in signal.find_peaks(global_wavelet_power_spectrum, prominence=100)[0]:
+	minimum_rhythmic_period_h = 0.8
+
+	for peak in signal.find_peaks(global_wavelet_power_spectrum)[0]:
 		# if power of peak contributes more than 1% of total power
 		#if ((global_wavelet_power_spectrum[peak] / global_wavelet_power_spectrum_total) * 100) > 1:
 		period = periods[peak]/60/60
-		power = global_wavelet_power_spectrum[peak]
-		ax.scatter(period, power, c="r", zorder=4)
-		#ax.text(period-2, power + ((ax.get_ylim())[1]*0.05), f"{np.round(period, 2)}h", rotation=90, color="r", weight="bold")
-		#ax.text(period + np.log(period), power, f"{np.round(period, 2)}h", rotation=0, color="r", weight="bold")
-		ax.text(period, -((ax.get_ylim())[1]*0.03), f"{np.int32(np.round(period, 0))}h", rotation=0, color="r", weight="bold", ha="center", va="center")
-		peaks_powers[period] = power
+
+		if period > minimum_rhythmic_period_h:
+			power = global_wavelet_power_spectrum[peak]
+			ax.scatter(period, power, c="r", zorder=4)
+			#ax.text(period-2, power + ((ax.get_ylim())[1]*0.05), f"{np.round(period, 2)}h", rotation=90, color="r", weight="bold")
+			#ax.text(period + np.log(period), power, f"{np.round(period, 2)}h", rotation=0, color="r", weight="bold")
+			ax.text(period, -((ax.get_ylim())[1]*0.03), f"{np.int32(np.round(period, 0))}h", rotation=0, color="r", weight="bold", ha="center", va="center")
+			peaks_powers[period] = power
 
 	ax.set_ylabel("Mean Wavelet Power (Magnitude$^2$)")
 	ax.set_xscale("log")
@@ -1325,7 +1333,7 @@ def simulated_subject(code):
 		"""
 		
 
-		"""
+
 		contains = {
 			168: 10,
 			24: 10,
@@ -1335,15 +1343,12 @@ def simulated_subject(code):
 			7:8,
 			3.7:6,
 			}
-		"""
-		contains = {
-			24: 10,
-			}
 
 
 
-		fig, ax = plt.subplots(len(contains.keys())+2, 1)
-		pntr = len(contains.keys())+1	
+		fig, ax = plt.subplots(len(contains.keys())+3, 1, figsize=(7,7), sharex=True)
+		plt.subplots_adjust(bottom=0.052, top=0.957, hspace=0.795)
+		pntr = len(contains.keys())+2	
 
 		for period, amplitude in contains.items(): 
 			if period == 24:
@@ -1353,7 +1358,8 @@ def simulated_subject(code):
 				component = rhythm(timevec, hours=period, A = amplitude, phi=rng.choice(np.arange(0, 2*np.pi, 0.1)))
 			data += component
 			contains[period] = amplitude	
-			ax[pntr].plot(component)
+			ax[pntr].plot(component, c="black")
+			ax[pntr].set_title(f"{period}h Component", loc="left")
 			pntr -= 1
 
 		spikes = np.zeros(len(data))
@@ -1485,11 +1491,12 @@ def simulated_subject(code):
 	noisy_data = data + noise
 	
 	
-	ax[0].plot(noisy_data, c="black")
-	ax[1].plot(noise)
-	plt.close(fig)
+	ax[1].plot(noisy_data, c="black")
+	ax[1].set_title("Simulated Data", loc="left")
+	ax[2].plot(noise, c="black")
+	ax[2].set_title("Noise Component", loc="left")
 	
-	return contains, data, noisy_data
+	return contains, data, noisy_data, fig, ax
 
 
 		
@@ -1512,7 +1519,8 @@ def temp_plot(subjects_methods_peaks, metric, now):
 	axes  = []
 	for i in range(0, len(methods)):
 		#fig, ax = plt.subplots(figsize=(19.20, 19.20))
-		fig, ax = plt.subplots(figsize=(10.8, 10.8))
+		#fig, ax = plt.subplots(figsize=(10.8, 10.8))
+		fig, ax = plt.subplots(figsize=(8, 10))
 		figures.append(fig)
 		axes.append(ax)	
 
@@ -1538,7 +1546,7 @@ def temp_plot(subjects_methods_peaks, metric, now):
 	# A: per-subject, per-method peaks power plot, 
 	# B: all subjects, per-method scatter plot
 
-	xticks = np.array([1, 2, 3, 4, 5, 10, 15, 20, 30, 40, 60, 80, 100, 150, 200, 250], dtype=np.int32)
+	xticks = np.array([1, 2, 3, 4, 5, 10, 15, 20, 30, 40, 60, 80, 100, 150, 250], dtype=np.int32)
 
 
 	for subject in pd.unique(subjects_methods_peaks_df["subject"]):
@@ -1552,8 +1560,9 @@ def temp_plot(subjects_methods_peaks, metric, now):
 
 		A_title = f"{A_title} ({metric_fullname(metric)})"
 
-		# A
-		fig_pp, ax_pp = plt.subplots(figsize=(10.80, 10.80))
+		# A?
+		#fig_pp, ax_pp = plt.subplots(figsize=(10.80, 10.80))
+		fig_pp, ax_pp = plt.subplots(figsize=(8, 10))
 		#ax_pp.set_xlabel("Period (log(h))")
 		ax_pp.set_xlabel("Period (h)")
 		ax_pp.set_ylabel("Signal Decomposition Method")
@@ -1606,7 +1615,8 @@ def temp_plot(subjects_methods_peaks, metric, now):
 			xt = np.append(xt, period)
 		ax_pp.set_xticks(xt)		
 		"""
-		harmonics = [(1/(n*(1.15e-5)))/60/60 for n in np.concatenate(([0.25, 0.5], np.arange(1, 20)))]
+		#harmonics = [(1/(n*(1.15e-5)))/60/60 for n in np.concatenate(([0.25, 0.5], np.arange(1, 20)))]
+		harmonics = [(1/(n*1.15e-5))/60/60 for n in np.arange(1, 10)]
 		for i, harmonic in enumerate(harmonics):
 			col="grey"
 			decr = 0.05
@@ -1630,7 +1640,13 @@ def temp_plot(subjects_methods_peaks, metric, now):
 		#sns.scatterplot(data=subjects_methods_peaks_df[subjects_methods_peaks_df["method"] == method], y="subject", x="cycle_period", hue="power", palette=pal, edgecolor="black", zorder=4, ax=ax)
 		
 		points = subjects_methods_peaks_df[subjects_methods_peaks_df["method"] == method]
+		points = points.dropna(axis=0)
+		points["harmonics"] = pd.Series(dtype='int')
 
+		points.loc[points["cycle_period"].astype(float).round(1).isin(np.unique(np.round(HARMONICS_24H, 1))), "harmonics"] = 1
+		points.loc[~points["cycle_period"].astype(float).round(1).isin(np.unique(np.round(HARMONICS_24H, 1))), "harmonics"] = 0
+
+		sns.scatterplot(data=points, y="subject", x="cycle_period", style="harmonics", markers={0: "o", 1: "X"},  hue="harmonics", palette={0:"black", 1:"grey"}, zorder=4, ax=ax, legend=False)	
 
 		for y in ax.get_yticks():
 			ax.axhline(y, c="silver", alpha=0.5, zorder=3.5)
@@ -1673,12 +1689,19 @@ def temp_plot(subjects_methods_peaks, metric, now):
 if __name__ == "__main__":
 	#subjects = ["909", "902", "931"] 
 	UCLH_subjects = ["1005","1055","1097","1119","1167","1182","1284","815","902","934","95", "1006","1064","1109","1149","1178","1200","770","821","909","940","999", "1038","1085","1110","1163","1179","1211","800","852","931","943"]
+
+	NEW_UCLH = ["998", "895", "874"]
+
+	UCLH_subjects = sorted(UCLH_subjects + NEW_UCLH)
+
 	taVNS_subjects = ["taVNS001","taVNS002","taVNS003","taVNS004","taVNS005","taVNS006","taVNS007","taVNS008","taVNS009","taVNS010","taVNS011","taVNS012","taVNS013","taVNS014","taVNS015","taVNS017","taVNS018"]
+
 
 	subjects = UCLH_subjects + taVNS_subjects
 	
-	subjects = ["sim"]
-	
+	#subjects = ["sim"]
+
+	#subjects = ["1085"]	
 	#subjects = ["1167"]
 	#subjects = ["1200"]
 	#subjects=["909"]
@@ -1689,11 +1712,14 @@ if __name__ == "__main__":
 	#subjects = ["815"]
 
 	#subjects = ["815", "1167", "1200", "909", "1284", "1119", "taVNS001", "taVNS006"]
-	#subjects = ["909", "taVNS001"]
+	
+	#subjects = ["909", "874"]
+	
 
 	#metrics = ["hr_mean", "fft_ratio", 'sdnn', 'rmssd', 'sdsd', 'nn50', 'pnn50', 'nn20', 'pnn20', 'tri_index', "fft_rel_VLF", "fft_rel_LF", "fft_rel_HF"]
 	metrics = ["hr_mean"] 
 
+	gaps_df = pd.DataFrame(columns = ["subject", "length_data", "length_gaps", "gap_proportion"])
 
 	start = time.time()	
 	now = datetime.datetime.now()
@@ -1751,6 +1777,8 @@ if __name__ == "__main__":
 
 					data = np.array(data)
 				
+					original_len = len(data)
+
 					if not "taVNS" in subject:	
 						# get timestamps corresponding to segments
 						timevec = edf_segment.EDFSegmenter(root, out, segment_len_s=300).get_segment_onsets(as_datetime=True)
@@ -1772,7 +1800,13 @@ if __name__ == "__main__":
 
 					# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
 					interpolated, timevec, gaps = interpolate_gaps(data, timevec, ax, out, metric) 
-				
+			
+					total_gap_length = 0	
+					for gap in gaps:
+						total_gap_length += gap[1]-gap[0]
+					gap_proportion = total_gap_length / original_len
+					gaps_df.loc[len(gaps_df.index)] = [subject, original_len, total_gap_length, gap_proportion]
+
 					fig.supylabel("bpm")	
 					fig.savefig(os.path.join(out, "preprocessing_plots", f"{metric}_preprocessing"))
 					plt.close(fig)
@@ -1851,6 +1885,7 @@ if __name__ == "__main__":
 			csvs_dir = constants.SUBJECT_DATA_OUT.format(subject='CSV')	
 			os.makedirs(csvs_dir, exist_ok=True)
 			subjects_methods_peaks_df.to_csv(os.path.join(csvs_dir, f"{metric}.csv"), index=False)
+			gaps_df.to_csv(os.path.join(csvs_dir, f"gaps.csv"), index=False)
 
 
 	
@@ -1867,7 +1902,7 @@ if __name__ == "__main__":
 
 		for i, letter in enumerate(letters):
 			
-			contains, noisefree_data, noisy_data = simulated_subject(letter)		
+			contains, noisefree_data, noisy_data, sim_fig2, sim_ax2 = simulated_subject(letter)		
 			
 
 			sim_ax[i, 0].plot(noisefree_data)
@@ -1878,7 +1913,8 @@ if __name__ == "__main__":
 			simulated_subjects_peaks[letter] = contains
 			simulated_subjects_peaks[f"{letter}n"] = contains
 
-			for suffix, data in zip(["", "n"], [noisefree_data, noisy_data]):
+			#for suffix, data in zip(["", "n"], [noisefree_data, noisy_data]):
+			for suffix, data in zip(["n"], [noisy_data]):
 				rng = np.random.default_rng(1905)
 			
 				out = constants.SUBJECT_DATA_OUT.format(subject=f"sim{letter}{suffix}")
@@ -1886,6 +1922,7 @@ if __name__ == "__main__":
 				# simulate missing data
 				data[math.floor(np.quantile(range(0, len(data)), 0.7)): math.ceil(np.quantile(range(0, len(data)), 0.8))] = np.NaN # large gap
 				data[rng.choice(len(data), math.floor(len(data) * 0.1))] = np.NaN # smaller gaps randomly throughout
+
 
 				timevec = [datetime.datetime.fromtimestamp(0) + datetime.timedelta(seconds=(i * 300)) for i in range(0, len(data))]
 				
@@ -1907,6 +1944,12 @@ if __name__ == "__main__":
 
 				# interpolate gaps (runs of NaN) so we can use with signal decomposition. save gap positions for visualisation
 				interpolated, timevec, gaps = interpolate_gaps(data, timevec, ax, out, metric) 
+				
+				sim_ax2[0].plot(interpolated, c="black", alpha=0.3)
+				sim_ax2[0].plot(data, c="black")
+				sim_ax2[0].set_title("Preprocessed Simulated Data", loc="left")
+				sim_fig2.supylabel("Simulated BPM")
+				sim_fig2.savefig(os.path.join(out, "preprocessing_plots", f"simulated_process"))
 				
 				fig.savefig(os.path.join(out, "preprocessing_plots", f"{metric}_preprocessing"))
 				plt.close(fig)
@@ -1973,7 +2016,8 @@ if __name__ == "__main__":
 			
 			DP = 1 
 
-			fig, ax = plt.subplots(len(methods)+1, 1, figsize=(10.8, 10.8), sharex=True)
+			#fig, ax = plt.subplots(len(methods)+1, 1, figsize=(10.8, 10.8), sharex=True)
+			fig, ax = plt.subplots(len(methods)+1, 1, figsize=(8, 10), sharex=True)
 			plt.subplots_adjust(bottom=0.05, top=0.957, hspace=0.402)
 			j = 0			
 			
