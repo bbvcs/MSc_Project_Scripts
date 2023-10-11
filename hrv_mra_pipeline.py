@@ -1675,29 +1675,24 @@ if __name__ == "__main__":
 	UCLH_subjects = ["1005","1055","1097","1119","1167","1182","1284","815","902","934","95", "1006","1064","1109","1149","1178","1200","770","821","909","940","999", "1038","1085","1110","1163","1179","1211","800","852","931","943"]
 	taVNS_subjects = ["taVNS001","taVNS002","taVNS003","taVNS004","taVNS005","taVNS006","taVNS007","taVNS008","taVNS009","taVNS010","taVNS011","taVNS012","taVNS013","taVNS014","taVNS015","taVNS017","taVNS018"]
 
-	subjects = UCLH_subjects + taVNS_subjects
+	#subjects = UCLH_subjects + taVNS_subjects
 	
-	subjects = ["sim"]
+	#subjects = ["sim"]
 	
-	#subjects = ["1167"]
-	#subjects = ["1200"]
-	#subjects=["909"]
-	#subjects = ["taVNS006"]
-	#subjects =["taVNS001"]
-	#subjects= ["1284"]
-	#subjects = ["1119"]
-	#subjects = ["815"]
+	#subjects = ["909"]
 
-	#subjects = ["815", "1167", "1200", "909", "1284", "1119", "taVNS001", "taVNS006"]
-	#subjects = ["909", "taVNS001"]
+	#subjects = ["998", "851", "895", "874", "1389", "1395"]
+	
+	#subjects = ["909"]
 
+	subjects = os.listdir(constants.SUBJECT_DATA_ROOT.split("{subject}")[0]) #all subjects
+
+	# which metrics to run mode decomposition pipeline over
 	#metrics = ["hr_mean", "fft_ratio", 'sdnn', 'rmssd', 'sdsd', 'nn50', 'pnn50', 'nn20', 'pnn20', 'tri_index', "fft_rel_VLF", "fft_rel_LF", "fft_rel_HF"]
 	metrics = ["hr_mean"] 
 
-
 	start = time.time()	
 	now = datetime.datetime.now()
-
 
 	logfile_dir = constants.SUBJECT_DATA_OUT.format(subject='LOGS')	
 	os.makedirs(logfile_dir, exist_ok=True)
@@ -1724,6 +1719,7 @@ if __name__ == "__main__":
 
 				plt.close("all")
 				print(f"\n$RUNNING FOR SUBJECT: {subject}\n")
+				subject_start = time.time()
 			
 				try:
 
@@ -1734,10 +1730,11 @@ if __name__ == "__main__":
 					
 					if not "taVNS" in subject:	
 						# collate data and resolve overlaps
-						#run_speedyf(root, out); 
+						run_speedyf(root, out); 
 						
 						# produce hrv metric dataframes, and save to out/
-						calculate_hrv_metrics(root, out, rng)# will not re-calculate if dataframes already present in out
+						#calculate_hrv_metrics(root, out, rng)# will not re-calculate if dataframes already present in out
+						calculate_hrv_metrics(root, out, rng, forced=True)
 
 					# load the hrv metric dataframes we just produced
 					time_dom_df, freq_dom_df, modification_report_df = load_hrv_dataframes(out)
@@ -1827,7 +1824,7 @@ if __name__ == "__main__":
 
 			
 					with open(logfile_loc, "a") as logfile:
-						logfile.write(f"\n{i+1}/{len(subjects)}:\t{subject}:\tSuccess!\tRuntime:{time.time()-start}")
+						logfile.write(f"\n{i+1}/{len(subjects)}:\t{subject}:\tSuccess!\tRuntime:{time.time()-subject_start}")
 
 				except Exception as e:
 				
